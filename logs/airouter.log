@@ -1,0 +1,190 @@
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.043ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type='table' AND name="users"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.139ms] [34;1m[rows:4][0m SELECT sql FROM sqlite_master WHERE type IN ("table","index") AND tbl_name = "users" AND sql IS NOT NULL order by type = "table" desc
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.035ms] [34;1m[rows:-][0m SELECT * FROM `users` LIMIT 1
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.030ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "users" AND name = "idx_users_username"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.025ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "users" AND name = "idx_users_email"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.032ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "users" AND name = "idx_users_deleted_at"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.030ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type='table' AND name="user_keys"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.088ms] [34;1m[rows:3][0m SELECT sql FROM sqlite_master WHERE type IN ("table","index") AND tbl_name = "user_keys" AND sql IS NOT NULL order by type = "table" desc
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.029ms] [34;1m[rows:-][0m SELECT * FROM `user_keys` LIMIT 1
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.028ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "user_keys" AND name = "idx_user_keys_user_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.026ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "user_keys" AND name = "idx_user_keys_deleted_at"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.022ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type='table' AND name="providers"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.076ms] [34;1m[rows:3][0m SELECT sql FROM sqlite_master WHERE type IN ("table","index") AND tbl_name = "providers" AND sql IS NOT NULL order by type = "table" desc
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.027ms] [34;1m[rows:-][0m SELECT * FROM `providers` LIMIT 1
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.027ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "providers" AND name = "idx_providers_name"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.026ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "providers" AND name = "idx_providers_deleted_at"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.021ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type='table' AND name="provider_apikeys"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.077ms] [34;1m[rows:3][0m SELECT sql FROM sqlite_master WHERE type IN ("table","index") AND tbl_name = "provider_apikeys" AND sql IS NOT NULL order by type = "table" desc
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.030ms] [34;1m[rows:-][0m SELECT * FROM `provider_apikeys` LIMIT 1
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.028ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "provider_apikeys" AND name = "idx_provider_apikeys_provider_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.025ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "provider_apikeys" AND name = "idx_provider_apikeys_deleted_at"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.022ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type='table' AND name="upstreams"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.084ms] [34;1m[rows:5][0m SELECT sql FROM sqlite_master WHERE type IN ("table","index") AND tbl_name = "upstreams" AND sql IS NOT NULL order by type = "table" desc
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.028ms] [34;1m[rows:-][0m SELECT * FROM `upstreams` LIMIT 1
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.028ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "upstreams" AND name = "idx_upstreams_model_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.027ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "upstreams" AND name = "idx_upstreams_provider_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.024ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "upstreams" AND name = "idx_upstreams_provider_api_key_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.025ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "upstreams" AND name = "idx_upstreams_deleted_at"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.022ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type='table' AND name="models"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.077ms] [34;1m[rows:4][0m SELECT sql FROM sqlite_master WHERE type IN ("table","index") AND tbl_name = "models" AND sql IS NOT NULL order by type = "table" desc
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.028ms] [34;1m[rows:-][0m SELECT * FROM `models` LIMIT 1
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.027ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "models" AND name = "idx_models_name"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.025ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "models" AND name = "idx_models_deleted_at"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.021ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type='table' AND name="usage_logs"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.087ms] [34;1m[rows:9][0m SELECT sql FROM sqlite_master WHERE type IN ("table","index") AND tbl_name = "usage_logs" AND sql IS NOT NULL order by type = "table" desc
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.029ms] [34;1m[rows:-][0m SELECT * FROM `usage_logs` LIMIT 1
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.028ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "usage_logs" AND name = "idx_usage_logs_status"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.024ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "usage_logs" AND name = "idx_usage_logs_created_at"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.025ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "usage_logs" AND name = "idx_usage_logs_user_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.026ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "usage_logs" AND name = "idx_usage_logs_user_key_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.024ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "usage_logs" AND name = "idx_usage_logs_upstream_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.025ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "usage_logs" AND name = "idx_usage_logs_provider_api_key_id"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:20
+[0m[33m[0.023ms] [34;1m[rows:-][0m SELECT count(*) FROM sqlite_master WHERE type = "index" AND tbl_name = "usage_logs" AND name = "idx_usage_logs_model"
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/store/sqlite/sqlite.go:44
+[0m[33m[0.093ms] [34;1m[rows:1][0m SELECT COUNT(*) FROM pragma_table_info('upstreams') WHERE name = 'api_path'
+
+2026/03/25 18:15:31 [32m/bigdata/liuyp/project/AIRouter/internal/api/handler/auth.go:168
+[0m[33m[0.205ms] [34;1m[rows:1][0m SELECT count(*) FROM `users` WHERE role = "admin" AND `users`.`deleted_at` IS NULL
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] POST   /v1/chat/completions      --> github.com/lyp256/airouter/internal/api/handler.(*ProxyHandler).ChatCompletions-fm (6 handlers)
+[GIN-debug] POST   /v1/completions           --> github.com/lyp256/airouter/internal/api/handler.(*ProxyHandler).Completions-fm (6 handlers)
+[GIN-debug] POST   /v1/messages              --> github.com/lyp256/airouter/internal/api/handler.(*ProxyHandler).AnthropicMessages-fm (6 handlers)
+[GIN-debug] GET    /v1/models                --> github.com/lyp256/airouter/internal/api/handler.(*ProxyHandler).Models-fm (6 handlers)
+[GIN-debug] POST   /v1/embeddings            --> github.com/lyp256/airouter/internal/api/handler.(*ProxyHandler).Embeddings-fm (6 handlers)
+[GIN-debug] POST   /api/admin/auth/login     --> github.com/lyp256/airouter/internal/api/handler.(*AuthHandler).Login-fm (4 handlers)
+[GIN-debug] POST   /api/admin/auth/logout    --> github.com/lyp256/airouter/internal/api/handler.(*AuthHandler).Logout-fm (4 handlers)
+[GIN-debug] GET    /api/admin/auth/me        --> github.com/lyp256/airouter/internal/api/handler.(*AuthHandler).GetCurrentUser-fm (5 handlers)
+[GIN-debug] PUT    /api/admin/auth/password  --> github.com/lyp256/airouter/internal/api/handler.(*AuthHandler).ChangePassword-fm (5 handlers)
+[GIN-debug] GET    /api/admin/providers      --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).ListProviders-fm (5 handlers)
+[GIN-debug] GET    /api/admin/providers/:id  --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).GetProvider-fm (5 handlers)
+[GIN-debug] POST   /api/admin/providers      --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).CreateProvider-fm (5 handlers)
+[GIN-debug] PUT    /api/admin/providers/:id  --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).UpdateProvider-fm (5 handlers)
+[GIN-debug] DELETE /api/admin/providers/:id  --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).DeleteProvider-fm (5 handlers)
+[GIN-debug] GET    /api/admin/providers/:id/keys --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).ListProviderAPIKEYs-fm (5 handlers)
+[GIN-debug] POST   /api/admin/providers/:id/keys --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).CreateProviderAPIKEY-fm (5 handlers)
+[GIN-debug] PUT    /api/admin/provider-keys/:key_id --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).UpdateProviderAPIKEY-fm (5 handlers)
+[GIN-debug] DELETE /api/admin/provider-keys/:key_id --> github.com/lyp256/airouter/internal/api/handler.(*ProviderHandler).DeleteProviderAPIKEY-fm (5 handlers)
+[GIN-debug] GET    /api/admin/models         --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).ListModels-fm (5 handlers)
+[GIN-debug] GET    /api/admin/models/:id     --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).GetModel-fm (5 handlers)
+[GIN-debug] POST   /api/admin/models         --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).CreateModel-fm (5 handlers)
+[GIN-debug] PUT    /api/admin/models/:id     --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).UpdateModel-fm (5 handlers)
+[GIN-debug] DELETE /api/admin/models/:id     --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).DeleteModel-fm (5 handlers)
+[GIN-debug] POST   /api/admin/models/:id/toggle --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).ToggleModel-fm (5 handlers)
+[GIN-debug] GET    /api/admin/upstreams      --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).ListUpstreams-fm (5 handlers)
+[GIN-debug] GET    /api/admin/upstreams/:id  --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).GetUpstream-fm (5 handlers)
+[GIN-debug] GET    /api/admin/models/:id/upstreams --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).ListModelUpstreams-fm (5 handlers)
+[GIN-debug] POST   /api/admin/models/:id/upstreams --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).CreateUpstream-fm (5 handlers)
+[GIN-debug] PUT    /api/admin/upstreams/:id  --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).UpdateUpstream-fm (5 handlers)
+[GIN-debug] DELETE /api/admin/upstreams/:id  --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).DeleteUpstream-fm (5 handlers)
+[GIN-debug] POST   /api/admin/upstreams/:id/toggle --> github.com/lyp256/airouter/internal/api/handler.(*ModelHandler).ToggleUpstream-fm (5 handlers)
+[GIN-debug] GET    /api/admin/users          --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).ListUsers-fm (5 handlers)
+[GIN-debug] GET    /api/admin/users/:id      --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).GetUser-fm (5 handlers)
+[GIN-debug] POST   /api/admin/users          --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).CreateUser-fm (5 handlers)
+[GIN-debug] PUT    /api/admin/users/:id      --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).UpdateUser-fm (5 handlers)
+[GIN-debug] DELETE /api/admin/users/:id      --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).DeleteUser-fm (5 handlers)
+[GIN-debug] GET    /api/admin/user-keys      --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).ListUserKeys-fm (5 handlers)
+[GIN-debug] GET    /api/admin/user-keys/me   --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).GetMyKeys-fm (5 handlers)
+[GIN-debug] POST   /api/admin/user-keys      --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).CreateUserKey-fm (5 handlers)
+[GIN-debug] PUT    /api/admin/user-keys/:key_id --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).UpdateUserKey-fm (5 handlers)
+[GIN-debug] DELETE /api/admin/user-keys/:key_id --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).DeleteUserKey-fm (5 handlers)
+[GIN-debug] POST   /api/admin/user-keys/:key_id/regenerate --> github.com/lyp256/airouter/internal/api/handler.(*UserHandler).RegenerateUserKey-fm (5 handlers)
+[GIN-debug] GET    /api/admin/stats/dashboard --> github.com/lyp256/airouter/internal/api/handler.(*StatsHandler).GetDashboard-fm (5 handlers)
+[GIN-debug] GET    /api/admin/stats/trend    --> github.com/lyp256/airouter/internal/api/handler.(*StatsHandler).GetUsageTrend-fm (5 handlers)
+[GIN-debug] GET    /api/admin/stats/models   --> github.com/lyp256/airouter/internal/api/handler.(*StatsHandler).GetModelStats-fm (5 handlers)
+[GIN-debug] GET    /api/admin/stats/users    --> github.com/lyp256/airouter/internal/api/handler.(*StatsHandler).GetUserStats-fm (5 handlers)
+[GIN-debug] GET    /api/admin/stats/logs     --> github.com/lyp256/airouter/internal/api/handler.(*StatsHandler).UsageLogList-fm (5 handlers)
+[GIN-debug] GET    /health                   --> main.setupRouter.func1 (4 handlers)
+{"level":"info","ts":1774433731.0942192,"caller":"airouter/main.go:91","msg":"AIRouter 启动成功","addr":"0.0.0.0:8080"}
+{"level":"info","ts":1774433731.0943024,"caller":"airouter/main.go:85","msg":"启动服务","addr":"0.0.0.0:8080"}
+{"level":"fatal","ts":1774433731.0946388,"caller":"airouter/main.go:87","msg":"服务启动失败","error":"listen tcp 0.0.0.0:8080: bind: address already in use","stacktrace":"main.main.func1\n\t/bigdata/liuyp/project/AIRouter/cmd/airouter/main.go:87"}

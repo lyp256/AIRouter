@@ -1,0 +1,47 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+database:
+  type: "sqlite"
+  path: "./data/airouter.db"
+  # type: "postgres"
+  # host: "localhost"
+  # port: 5432
+  # user: "airouter"
+  # password: "password"
+  # database: "airouter"
+
+security:
+  encryption_key: "your-32-byte-encryption-key-here"  # 32字节 AES 加密密钥
+  jwt_secret: "your-jwt-secret-key-change-me"        # JWT 签名密钥
+  jwt_expire: "24h"
+  admin_token: "your-admin-token-change-me"           # 管理 API 访问令牌
+
+logging:
+  level: "info"
+  format: "json"
+
+rate_limit:
+  enabled: true
+  default_rpm: 60
+
+# 重试配置
+retry:
+  enabled: true          # 是否启用重试
+  max_attempts: 3        # 最大重试次数（包含首次请求）
+  initial_wait: "1s"     # 初始等待时间
+  max_wait: "30s"        # 最大等待时间
+  multiplier: 2.0        # 退避乘数
+  retry_on_codes:        # 触发重试的 HTTP 状态码
+    - 429                # 请求过多
+    - 500                # 服务器内部错误
+    - 502                # 网关错误
+    - 503                # 服务不可用
+    - 504                # 网关超时
+
+# 初始管理员账户（首次启动创建）
+admin:
+  username: "admin"
+  password: "changeme"   # 请修改默认密码
+  email: "admin@example.com"
