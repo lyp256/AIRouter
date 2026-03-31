@@ -119,6 +119,7 @@ export interface UsageLog {
   first_token_latency: number // 首Token延迟(ms)，仅流式请求有效
   total_duration: number // 总耗时(ms)，从请求发起到响应完成
   status: string
+  upstream_status_code: number // 上游模型返回的 HTTP 状态码
   error_message: string
   request_id: string
   created_at: string

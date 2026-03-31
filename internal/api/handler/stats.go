@@ -22,26 +22,27 @@ func NewStatsHandler(db *gorm.DB) *StatsHandler {
 
 // UsageLogResponse 日志列表响应（包含关联查询字段）
 type UsageLogResponse struct {
-	ID                string `json:"id"`
-	UserID            string `json:"user_id"`
-	Username          string `json:"username"`
-	UserKeyID         string `json:"user_key_id"`
-	UpstreamID        string `json:"upstream_id"`
-	ProviderKeyID     string `json:"provider_key_id"`
-	Model             string `json:"model"`
-	ProviderType      string `json:"provider_type"`
-	ProviderModel     string `json:"provider_model"`
-	ProviderName      string `json:"provider_name"`
-	InputTokens       int    `json:"input_tokens"`
-	OutputTokens      int    `json:"output_tokens"`
-	Cost              int64  `json:"cost"`
-	Latency           int    `json:"latency"`
-	FirstTokenLatency int    `json:"first_token_latency"`
-	TotalDuration     int    `json:"total_duration"`
-	Status            string `json:"status"`
-	ErrorMessage      string `json:"error_message"`
-	RequestID         string `json:"request_id"`
-	CreatedAt         string `json:"created_at"`
+	ID                 string `json:"id"`
+	UserID             string `json:"user_id"`
+	Username           string `json:"username"`
+	UserKeyID          string `json:"user_key_id"`
+	UpstreamID         string `json:"upstream_id"`
+	ProviderKeyID      string `json:"provider_key_id"`
+	Model              string `json:"model"`
+	ProviderType       string `json:"provider_type"`
+	ProviderModel      string `json:"provider_model"`
+	ProviderName       string `json:"provider_name"`
+	InputTokens        int    `json:"input_tokens"`
+	OutputTokens       int    `json:"output_tokens"`
+	Cost               int64  `json:"cost"`
+	Latency            int    `json:"latency"`
+	FirstTokenLatency  int    `json:"first_token_latency"`
+	TotalDuration      int    `json:"total_duration"`
+	Status             string `json:"status"`
+	UpstreamStatusCode int    `json:"upstream_status_code"`
+	ErrorMessage       string `json:"error_message"`
+	RequestID          string `json:"request_id"`
+	CreatedAt          string `json:"created_at"`
 }
 
 // DashboardStats 仪表盘统计数据
@@ -300,7 +301,8 @@ func (h *StatsHandler) UsageLogList(c *gin.Context) {
 		Select(`ul.id, ul.user_id, u.username, ul.user_key_id, ul.upstream_id,
 				ul.provider_key_id, ul.model, m.provider_type, up.provider_model,
 				p.name as provider_name, ul.input_tokens, ul.output_tokens, ul.cost,
-				ul.latency, ul.first_token_latency, ul.total_duration, ul.status, ul.error_message,
+				ul.latency, ul.first_token_latency, ul.total_duration, ul.status,
+				ul.upstream_status_code, ul.error_message,
 				ul.request_id, ul.created_at`).
 		Joins("LEFT JOIN users u ON ul.user_id = u.id").
 		Order("ul.created_at DESC").
