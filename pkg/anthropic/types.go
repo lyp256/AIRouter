@@ -1,11 +1,49 @@
 package anthropic
 
+import "encoding/json"
+
+// SystemContent 系统提示词（支持字符串或内容块数组）
+type SystemContent []SystemBlock
+
+// UnmarshalJSON 实现自定义反序列化，支持 string 和 array 两种格式
+func (s *SystemContent) UnmarshalJSON(data []byte) error {
+	// 尝试解析为字符串
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		*s = SystemContent{{Type: "text", Text: str}}
+		return nil
+	}
+
+	// 解析为数组
+	var blocks []SystemBlock
+	if err := json.Unmarshal(data, &blocks); err != nil {
+		return err
+	}
+	*s = blocks
+	return nil
+}
+
+// MarshalJSON 实现自定义序列化，空值输出 null
+func (s SystemContent) MarshalJSON() ([]byte, error) {
+	if len(s) == 0 {
+		return []byte("null"), nil
+	}
+	return json.Marshal([]SystemBlock(s))
+}
+
+// SystemBlock 系统内容块
+type SystemBlock struct {
+	Type         string                 `json:"type"`                    // text
+	Text         string                 `json:"text,omitempty"`          // 文本内容
+	CacheControl map[string]interface{} `json:"cache_control,omitempty"` // 缓存控制
+}
+
 // MessagesRequest Anthropic Messages API 请求
 type MessagesRequest struct {
 	Model         string                 `json:"model"`
 	Messages      []Message              `json:"messages"`
 	MaxTokens     int                    `json:"max_tokens"`
-	System        string                 `json:"system,omitempty"`         // 系统提示词
+	System        SystemContent          `json:"system,omitempty"`         // 系统提示词（支持字符串或数组）
 	Temperature   *float64               `json:"temperature,omitempty"`    // 采样温度 0-1
 	TopP          *float64               `json:"top_p,omitempty"`          // nucleus sampling
 	TopK          *int                   `json:"top_k,omitempty"`          // top-k sampling
