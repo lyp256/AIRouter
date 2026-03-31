@@ -55,6 +55,11 @@ const routes: RouteRecordRaw[] = [
     name: 'Login',
     component: () => import('@/views/Login.vue'),
     meta: { title: '登录', requiresAuth: false }
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'NotFound',
+    redirect: '/'
   }
 ]
 

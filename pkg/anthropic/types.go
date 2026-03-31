@@ -28,8 +28,9 @@ type MessageContent interface{}
 
 // ContentBlock 内容块
 type ContentBlock struct {
-	Type      string       `json:"type"` // text, image, tool_use, tool_result
+	Type      string       `json:"type"` // text, thinking, image, tool_use, tool_result
 	Text      string       `json:"text,omitempty"`
+	Thinking  string       `json:"thinking,omitempty"` // thinking 类型的内容
 	Source    *ImageSource `json:"source,omitempty"`
 	ToolUseID string       `json:"tool_use_id,omitempty"`
 	Content   interface{}  `json:"content,omitempty"` // tool_result 的内容
@@ -100,14 +101,16 @@ type StreamEvent struct {
 
 // StreamDelta 流式增量
 type StreamDelta struct {
-	Type        string `json:"type"` // text_delta, input_json_delta
+	Type        string `json:"type"` // text_delta, thinking_delta, input_json_delta
 	Text        string `json:"text,omitempty"`
-	PartialJSON string `json:"partial_json,omitempty"`
+	Thinking    string `json:"thinking,omitempty"` // thinking_delta 类型的内容
 	StopReason  string `json:"stop_reason,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
 }
 
-// DeltaUsage 增量使用量
+// DeltaUsage 增量使用量（message_delta 事件的 usage 字段）
 type DeltaUsage struct {
+	InputTokens  int `json:"input_tokens"` // 智谱等 API 在 message_delta 返回
 	OutputTokens int `json:"output_tokens"`
 }
 

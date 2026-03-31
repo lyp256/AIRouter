@@ -113,11 +113,12 @@ func (Upstream) TableName() string {
 // 移除了 ProviderID、ProviderModel、APIPath，通过 Upstream 关联
 type Model struct {
 	ID            string         `gorm:"primaryKey;size:36" json:"id"`
-	Name          string         `gorm:"uniqueIndex;size:64;not null" json:"name"` // 模型名称（对外展示）
-	Description   string         `gorm:"size:512" json:"description"`              // 模型描述
-	InputPrice    float64        `gorm:"default:0" json:"input_price"`             // 输入价格（每1K token）
-	OutputPrice   float64        `gorm:"default:0" json:"output_price"`            // 输出价格（每1K token）
-	ContextWindow int            `gorm:"default:4096" json:"context_window"`       // 上下文窗口大小
+	Name          string         `gorm:"uniqueIndex:idx_model_name_type;size:64;not null" json:"name"`          // 模型名称（对外展示）
+	ProviderType  string         `gorm:"uniqueIndex:idx_model_name_type;size:32;not null" json:"provider_type"` // 供应商类型：openai, anthropic, openai_compatible
+	Description   string         `gorm:"size:512" json:"description"`                                           // 模型描述
+	InputPrice    int64          `gorm:"default:0" json:"input_price"`                                          // 输入价格（纳 BU/1K token）
+	OutputPrice   int64          `gorm:"default:0" json:"output_price"`                                         // 输出价格（纳 BU/1K token）
+	ContextWindow int            `gorm:"default:4096" json:"context_window"`                                    // 上下文窗口大小
 	Enabled       bool           `gorm:"default:true" json:"enabled"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
@@ -130,23 +131,24 @@ func (Model) TableName() string {
 }
 
 // UsageLog 使用日志模型
+// 使用 ID 关联外部数据，通过 JOIN 查询获取完整信息
 type UsageLog struct {
-	ID            string    `gorm:"primaryKey;size:36" json:"id"`
-	UserID        string    `gorm:"index;size:36" json:"user_id"`
-	UserKeyID     string    `gorm:"index;size:36" json:"user_key_id"`
-	UpstreamID    string    `gorm:"index;size:36" json:"upstream_id"`     // 关联上游模型
-	ProviderKeyID string    `gorm:"index;size:36" json:"provider_key_id"` // 关联供应商密钥
-	Model         string    `gorm:"index;size:64" json:"model"`           // 对外模型名称
-	ProviderModel string    `gorm:"size:64" json:"provider_model"`        // 实际调用的供应商模型
-	ProviderName  string    `gorm:"size:64" json:"provider_name"`         // 供应商名称
-	InputTokens   int       `gorm:"default:0" json:"input_tokens"`
-	OutputTokens  int       `gorm:"default:0" json:"output_tokens"`
-	Cost          float64   `gorm:"default:0" json:"cost"`
-	Latency       int       `gorm:"default:0" json:"latency"`    // 延迟(ms)
-	Status        string    `gorm:"size:16;index" json:"status"` // success, error
-	ErrorMessage  string    `gorm:"type:text" json:"error_message"`
-	RequestID     string    `gorm:"size:36" json:"request_id"`
-	CreatedAt     time.Time `gorm:"index" json:"created_at"`
+	ID                string    `gorm:"primaryKey;size:36" json:"id"`
+	UserID            string    `gorm:"index;size:36" json:"user_id"`
+	UserKeyID         string    `gorm:"index;size:36" json:"user_key_id"`
+	UpstreamID        string    `gorm:"index;size:36" json:"upstream_id"`     // 关联上游模型，可获取 provider_model、model_id、provider_id
+	ProviderKeyID     string    `gorm:"index;size:36" json:"provider_key_id"` // 关联供应商密钥
+	Model             string    `gorm:"index;size:64" json:"model"`           // 对外模型名称（保留用于索引优化）
+	InputTokens       int       `gorm:"default:0" json:"input_tokens"`
+	OutputTokens      int       `gorm:"default:0" json:"output_tokens"`
+	Cost              int64     `gorm:"default:0" json:"cost"`                // 费用（纳 BU）
+	Latency           int       `gorm:"default:0" json:"latency"`             // 延迟(ms)，流式请求为TTFB
+	FirstTokenLatency int       `gorm:"default:0" json:"first_token_latency"` // 首Token延迟(ms)，仅流式请求有效
+	TotalDuration     int       `gorm:"default:0" json:"total_duration"`      // 总耗时(ms)，从请求发起到响应完成
+	Status            string    `gorm:"size:16;index" json:"status"`          // success, error
+	ErrorMessage      string    `gorm:"type:text" json:"error_message"`
+	RequestID         string    `gorm:"size:36" json:"request_id"`
+	CreatedAt         time.Time `gorm:"index" json:"created_at"`
 }
 
 // TableName 指定表名

@@ -1,6 +1,6 @@
 module github.com/lyp256/airouter
 
-go 1.24
+go 1.22
 
 require (
 	github.com/gin-gonic/gin v1.9.1

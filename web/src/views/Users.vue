@@ -5,6 +5,9 @@ import type { User, UserKey } from '@/api/types'
 
 const users = ref<User[]>([])
 const loading = ref(false)
+const currentPage = ref(1)
+const total = ref(0)
+const pageSize = 20
 const showModal = ref(false)
 const showKeyModal = ref(false)
 const selectedUser = ref<User | null>(null)
@@ -28,11 +31,17 @@ const newKey = ref({
 async function loadUsers() {
   loading.value = true
   try {
-    const res = await userApi.list()
+    const res = await userApi.list(currentPage.value, pageSize)
     users.value = res.data
+    total.value = res.total
   } finally {
     loading.value = false
   }
+}
+
+function goToPage(page: number) {
+  currentPage.value = page
+  loadUsers()
 }
 
 async function createUser() {
@@ -133,7 +142,16 @@ onMounted(loadUsers)
       </button>
     </div>
 
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow">
+    <!-- 加载动画 -->
+    <div v-if="loading" class="flex items-center justify-center py-16 bg-white dark:bg-gray-800 rounded-lg shadow">
+      <svg class="animate-spin w-6 h-6 text-blue-500 mr-3" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+      </svg>
+      <span class="text-gray-500 dark:text-gray-400">加载中...</span>
+    </div>
+
+    <div v-else class="bg-white dark:bg-gray-800 rounded-lg shadow">
       <table class="w-full">
         <thead class="bg-gray-50 dark:bg-gray-700">
           <tr>
@@ -169,6 +187,14 @@ onMounted(loadUsers)
           </tr>
         </tbody>
       </table>
+      <!-- 分页 -->
+      <div v-if="total > pageSize" class="flex items-center justify-between px-6 py-3 border-t dark:border-gray-700">
+        <span class="text-sm text-gray-500 dark:text-gray-400">共 {{ total }} 条，第 {{ currentPage }} / {{ Math.ceil(total / pageSize) }} 页</span>
+        <div class="flex gap-2">
+          <button @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1" class="px-3 py-1 text-sm border rounded-lg dark:border-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed">上一页</button>
+          <button @click="goToPage(currentPage + 1)" :disabled="currentPage >= Math.ceil(total / pageSize)" class="px-3 py-1 text-sm border rounded-lg dark:border-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed">下一页</button>
+        </div>
+      </div>
     </div>
 
     <!-- 创建用户弹窗 -->

@@ -134,15 +134,11 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 	if req.Type != "" {
 		updates["type"] = req.Type
 	}
-	if req.BaseURL != "" {
-		updates["base_url"] = req.BaseURL
-	}
-	if req.APIPath != "" {
-		updates["api_path"] = req.APIPath
-	}
-	if req.Description != "" {
-		updates["description"] = req.Description
-	}
+	// base_url 和 api_path 允许设为空值
+	updates["base_url"] = req.BaseURL
+	updates["api_path"] = req.APIPath
+	// description 允许设为空值
+	updates["description"] = req.Description
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
 	}

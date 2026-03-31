@@ -105,10 +105,11 @@ type ModelsResponse struct {
 
 // ModelInfo 模型信息
 type ModelInfo struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
+	ID           string `json:"id"`
+	Object       string `json:"object"`
+	Created      int64  `json:"created"`
+	OwnedBy      string `json:"owned_by"`
+	ProviderType string `json:"provider_type,omitempty"` // 供应商类型：openai, anthropic, openai_compatible
 }
 
 // EmbeddingRequest Embedding 请求
@@ -143,6 +144,12 @@ type StreamChunk struct {
 	Model             string       `json:"model"`
 	Choices           []ChatChoice `json:"choices"`
 	SystemFingerprint string       `json:"system_fingerprint,omitempty"`
+	Usage             *Usage       `json:"usage,omitempty"` // 流式最后的 usage（需要 stream_options.include_usage: true）
+}
+
+// StreamOptions 流式选项
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"` // 是否在流式响应最后包含 usage 信息
 }
 
 // CompletionRequest Completions API 请求（旧版文本补全）

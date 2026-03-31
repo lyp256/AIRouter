@@ -375,9 +375,9 @@ func (m *Metrics) RecordTokenUsage(tokenType, model, provider string, count int6
 	m.TokensTotal.Add(count, tokenType, model, provider)
 }
 
-// RecordCost 记录费用（单位：分）
-func (m *Metrics) RecordCost(model, provider string, cost float64) {
-	m.CostTotal.Add(int64(cost*100), model, provider)
+// RecordCost 记录费用（单位：纳 BU）
+func (m *Metrics) RecordCost(model, provider string, cost int64) {
+	m.CostTotal.Add(cost, model, provider)
 }
 
 // RecordError 记录错误

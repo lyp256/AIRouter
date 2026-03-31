@@ -235,13 +235,28 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 |------|------|------|
 | `ID` | string | 模型 ID |
 | `Name` | string | 模型名称（对外展示） |
+| `ProviderType` | string | 供应商类型：openai, anthropic, openai_compatible（必填，创建后不可修改） |
 | `Description` | string | 模型描述 |
-| `InputPrice` | float64 | 输入价格（$/1K tokens） |
-| `OutputPrice` | float64 | 输出价格（$/1K tokens） |
+| `InputPrice` | int64 | 输入价格（纳 BU/1K tokens） |
+| `OutputPrice` | int64 | 输出价格（纳 BU/1K tokens） |
 | `ContextWindow` | int | 上下文窗口大小 |
 | `Enabled` | bool | 是否启用 |
 | `CreatedAt` | time.Time | 创建时间 |
 | `UpdatedAt` | time.Time | 更新时间 |
+
+**唯一约束**：`(Name, ProviderType)` 组合唯一索引，支持同名不同类型的模型。
+
+**类型约束**：
+- 模型创建时必须指定 `ProviderType`，创建后不可修改
+- 添加上游模型时，供应商类型必须与模型的 `ProviderType` 匹配
+
+**BU 计量单位**：
+- 最小单位：纳 BU（Nano，nBU）
+- 换算关系：1000 纳 = 1 微，1000 微 = 1 毫，1000 毫 = 1 BU
+- 1 BU = 10^9 纳 BU
+- 所有价格、费用、配额字段统一使用 int64 存储纳 BU 值
+- 前端显示单位：BU/M tokens（每百万 token 的价格）
+- 后端存储单位：纳 BU/K tokens（每千 token 的价格，乘以 10^6 得到存储值）
 
 ### 3.7 Upstream（上游模型）
 
@@ -261,24 +276,31 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 
 ### 3.8 UsageLog（使用日志）
 
+使用 ID 关联外部数据，通过 JOIN 查询获取完整信息，避免数据冗余。
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `ID` | string | 日志 ID |
 | `UserID` | string | 用户 ID |
 | `UserKeyID` | string | 用户密钥 ID |
-| `UpstreamID` | string | 上游模型 ID |
+| `UpstreamID` | string | 上游模型 ID（可获取 provider_model、model_id、provider_id） |
 | `ProviderKeyID` | string | 供应商密钥 ID |
-| `Model` | string | 对外模型名称 |
-| `ProviderModel` | string | 实际调用的供应商模型 |
-| `ProviderName` | string | 供应商名称 |
+| `Model` | string | 对外模型名称（保留用于索引优化） |
 | `InputTokens` | int | 输入 token 数 |
 | `OutputTokens` | int | 输出 token 数 |
-| `Cost` | float64 | 费用 |
+| `Cost` | int64 | 费用（纳 BU） |
 | `Latency` | int | 延迟(ms) |
+| `FirstTokenLatency` | int | 首 Token 延迟(ms)，仅流式请求有效 |
 | `Status` | string | 状态：success, error |
 | `ErrorMessage` | string | 错误信息 |
 | `RequestID` | string | 请求 ID |
 | `CreatedAt` | time.Time | 创建时间 |
+
+**关联查询字段**（通过 JOIN 获取）：
+- `Username` - 用户名（来自 users 表）
+- `ProviderType` - 协议类型（来自 models 表）
+- `ProviderModel` - 供应商模型（来自 upstreams 表）
+- `ProviderName` - 供应商名称（来自 providers 表）
 
 ---
 
@@ -382,19 +404,23 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | GET | `/api/admin/upstreams` | 上游模型列表 |
 | GET | `/api/admin/upstreams/{id}` | 上游模型详情 |
 | GET | `/api/admin/models/{id}/upstreams` | 模型的上游模型列表 |
-| POST | `/api/admin/models/{id}/upstreams` | 为模型添加上游模型 |
+| POST | `/api/admin/models/{id}/upstreams` | 为模型添加上游模型（供应商类型必须匹配） |
 | PUT | `/api/admin/upstreams/{id}` | 更新上游模型 |
 | DELETE | `/api/admin/upstreams/{id}` | 删除上游模型 |
 | POST | `/api/admin/upstreams/{id}/toggle` | 切换上游模型启用状态 |
+
+**类型匹配约束**：创建上游模型时，供应商的 `type` 必须与模型的 `provider_type` 一致，否则返回 400 错误。
 
 #### 使用统计
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/admin/stats/usage` | 使用记录列表 |
-| GET | `/api/admin/stats/summary` | 统计汇总 |
-| GET | `/api/admin/stats/by-user` | 按用户统计 |
-| GET | `/api/admin/stats/by-model` | 按模型统计 |
+| GET | `/api/admin/stats/dashboard` | 仪表盘统计（今日请求数、Token 数、消费、成功率） |
+| GET | `/api/admin/stats/trend?days=N` | 使用趋势（默认 7 天，最大 30 天） |
+| GET | `/api/admin/stats/models?days=N` | 按模型统计 |
+| GET | `/api/admin/stats/users?days=N` | 按用户统计 |
+| GET | `/api/admin/stats/filter-options` | 筛选选项（模型、协议类型、厂商、供应商密钥、状态） |
+| GET | `/api/admin/stats/logs?model=&provider_type=&provider_name=&provider_key_id=&status=` | 使用日志列表 |
 
 ### 4.3 其他
 
@@ -490,12 +516,14 @@ web/
 │   ├── api/                       # API 请求
 │   │   ├── index.ts               # axios 封装
 │   │   ├── auth.ts                # 认证
-│   │   ├── chat.ts                # 聊天 API（流式响应）
+│   │   ├── chat.ts                # 聊天 API（流式响应 + 会话管理）
 │   │   ├── user.ts                # 用户管理
 │   │   ├── provider.ts            # 供应商管理
 │   │   ├── model.ts               # 模型管理（含上游模型）
 │   │   ├── stats.ts               # 使用统计
-│   │   └── types.ts               # 类型定义
+│   │   └── types.ts               # 全局类型定义（含 FilterOptions）
+│   ├── utils/
+│   │   └── format.ts              # BU 格式化工具函数
 │   ├── components/
 │   │   └── Sidebar.vue            # 侧边栏
 │   ├── views/                     # 页面
@@ -509,7 +537,9 @@ web/
 │   │   ├── Statistics.vue         # 使用统计
 │   │   └── Settings.vue           # 设置
 │   ├── router/index.ts            # 路由配置
-│   ├── stores/user.ts             # Pinia 状态管理
+│   ├── stores/
+│   │   ├── user.ts                # 用户状态管理
+│   │   └── chat.ts                # 聊天状态管理（后台会话、流式响应）
 │   ├── App.vue
 │   └── main.ts
 ├── index.html
@@ -553,12 +583,38 @@ web/
 - 延迟统计
 - 错误率统计
 
-### 7.6 加密存储 (crypto.go)
+### 7.6 BU 计量单位 (pkg/bu/bu.go)
+
+系统使用抽象计量单位 BU（Basic Unit），统一表示价格、配额和费用：
+
+**单位定义**：
+- 最小单位：纳 BU（Nano，nBU）
+- 换算关系：1000 纳 = 1 微，1000 微 = 1 毫，1000 毫 = 1 BU
+- 1 BU = 10^9 纳 BU
+
+**存储与显示**：
+- 后端存储：int64 纳 BU/K tokens（每千 token 价格）
+- 前端显示：BU/M tokens（每百万 token 价格）
+- 换算：存储值 × 10^-6 = 显示值
+
+**后端工具函数**：
+- `FromFloat(value float64) int64` - BU 转纳 BU
+- `ToFloat(value int64) float64` - 纳 BU 转 BU
+- `CalculateCost(pricePerK int64, tokens int) int64` - 计算费用
+- `Format(value int64) string` - 格式化显示
+
+**前端工具函数** (`web/src/utils/format.ts`)：
+- `formatBU(nano)` - 格式化 BU 显示（通用，用于成本、消费等）
+- `formatPricePerM(storageValue)` - 格式化价格显示（BU/M tokens）
+- `storageToDisplay(storageValue)` - 存储（纳 BU/K）转显示（BU/M）
+- `displayToStorage(displayValue)` - 显示（BU/M）转存储（纳 BU/K）
+
+### 7.7 加密存储 (crypto.go)
 
 - AES-GCM 加密算法
 - API Key 加密存储
 
-### 7.7 混合认证机制 (apikey.go)
+### 7.8 混合认证机制 (apikey.go)
 
 对外 API 支持两种认证方式：
 - **API Key 认证**：传统方式，直接使用 `Authorization: Bearer <api_key>`
@@ -572,6 +628,57 @@ JWT + KeyID 认证流程：
 5. 验证通过后使用该密钥处理请求
 
 前端聊天功能使用此机制，用户可选择自己的密钥调用模型。
+
+### 7.9 前端协议自动选择
+
+前端聊天页面根据模型的 `provider_type` 自动选择 API 协议：
+
+| 模型类型 | API 端点 | 协议格式 |
+|---------|---------|---------|
+| `anthropic` | `/v1/messages` | Anthropic Messages API |
+| `openai` | `/v1/chat/completions` | OpenAI Chat Completions API |
+| `openai_compatible` | `/v1/chat/completions` | OpenAI Chat Completions API |
+
+**实现方式**：
+- 管理后台通过 `modelApi.adminList()` 获取完整模型信息（含 `provider_type`）
+- `/v1/models` 端点返回 OpenAI 兼容格式的模型列表，`modelApi.list()` 直接调用此端点
+- 前端根据当前选中模型的类型，动态选择调用对应的 API 端点
+- 支持 Anthropic 原生协议的流式响应处理
+
+### 7.10 会话管理
+
+聊天页面支持多会话管理，会话数据存储在 `sessionStorage` 中：
+
+**会话存储**：
+- `ChatSession` 类型定义在 `api/chat.ts`，包含 id、name、model、modelId、keyId、messages 等
+- `saveChatSession()` / `getChatSessions()` / `deleteChatSession()` 管理会话 CRUD
+- `stores/chat.ts` 中的 `completeAndSaveBackgroundSession()` 复用 `saveChatSession()` 保存后台完成的会话
+
+**后台会话**：
+- `stores/chat.ts` (Pinia Store) 管理正在进行的聊天会话状态
+- 支持切换页面后继续在后台处理流式响应
+- 返回聊天页面时自动恢复后台会话状态（消息、流式内容、参数）
+
+### 7.10 思考过程显示
+
+管理后台聊天功能支持显示推理模型的思考过程：
+
+**OpenAI 协议**：
+- 支持 `reasoning_content` 字段（DeepSeek R1 等模型）
+- 流式响应中 `delta.reasoning_content` 包含思考内容
+
+**Anthropic 协议**：
+- 支持 `thinking` 类型内容块（Claude Extended Thinking）
+- 流式响应中 `thinking_delta` 类型的增量事件包含思考内容
+- 类型定义：
+  - `ContentBlock.type = "thinking"` - 思考内容块
+  - `StreamDelta.type = "thinking_delta"` - 思考增量事件
+  - `StreamDelta.thinking` - 思考内容文本
+
+**前端实现**：
+- 流式响应时实时显示思考过程，带"正在思考..."动画
+- 完成后思考内容可折叠展示
+- 支持 Markdown 渲染
 
 ---
 
@@ -625,6 +732,7 @@ admin:
 | 阶段六：管理 API 与前端 | ✅ 已完成 | 完整管理 API、前端页面 |
 | 阶段七：高级功能 | ✅ 已完成 | 统计、配额、健康检查、Prometheus |
 | 数据模型重构 | ✅ 已完成 | 引入 Upstream 概念，支持跨供应商负载均衡 |
+| 模型类型属性 | ✅ 已完成 | 模型添加 provider_type 属性，支持同名不同类型模型，上游模型供应商类型约束 |
 | 阶段八：部署与文档 | ⏸️ 暂缓 | Dockerfile 已完成，其他暂缓 |
 
 ---

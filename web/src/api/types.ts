@@ -68,14 +68,27 @@ export interface Upstream {
   provider_key_name?: string
 }
 
+// UpstreamTestResult 上游模型测试结果
+export interface UpstreamTestResult {
+  success: boolean
+  latency_ms: number
+  first_token_latency_ms: number
+  message: string
+  upstream_id: string
+  provider_name: string
+  provider_model: string
+  response_content?: string
+}
+
 // Model 对外大模型
 // 移除了 provider_id, provider_model, api_path 字段（通过 Upstream 关联）
 export interface Model {
   id: string
   name: string
+  provider_type: string // 供应商类型：openai, anthropic, openai_compatible（必填，创建后不可修改）
   description: string
-  input_price: number
-  output_price: number
+  input_price: number  // 输入价格（纳 BU/1K token）
+  output_price: number // 输出价格（纳 BU/1K token）
   context_window: number
   enabled: boolean
   created_at: string
@@ -87,19 +100,24 @@ export interface ModelWithUpstreams extends Model {
   upstreams: Upstream[]
 }
 
+// UsageLog 使用日志（通过 JOIN 查询获取完整数据）
 export interface UsageLog {
   id: string
   user_id: string
+  username?: string // 关联查询：用户名
   user_key_id: string
   upstream_id: string
   provider_key_id: string
   model: string
-  provider_model: string
-  provider_name: string
+  provider_type?: string // 关联查询：协议类型
+  provider_model?: string // 关联查询：供应商模型
+  provider_name?: string // 关联查询：供应商名称
   input_tokens: number
   output_tokens: number
-  cost: number
+  cost: number // 费用（纳 BU）
   latency: number
+  first_token_latency: number // 首Token延迟(ms)，仅流式请求有效
+  total_duration: number // 总耗时(ms)，从请求发起到响应完成
   status: string
   error_message: string
   request_id: string
@@ -109,6 +127,14 @@ export interface UsageLog {
 export interface ApiResponse<T> {
   data: T
   message?: string
+}
+
+export interface FilterOptions {
+  models: string[]
+  provider_types: string[]
+  provider_names: string[]
+  provider_keys: { id: string; name: string }[]
+  statuses: string[]
 }
 
 export interface PaginatedResponse<T> {
@@ -123,6 +149,8 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
   reasoning_content?: string // 思考内容（DeepSeek R1 等）
+  modelName?: string      // 模型名称
+  providerType?: string   // 协议类型：openai | anthropic | openai_compatible
 }
 
 export interface ChatRequest {
@@ -154,4 +182,78 @@ export interface ChatResponse {
   choices: ChatChoice[]
   usage?: ChatUsage
   created?: number
+}
+
+// OpenAI 兼容的模型信息（/models API 返回格式）
+export interface OpenAIModelInfo {
+  id: string            // 模型名称
+  object: string
+  created: number
+  owned_by: string
+  provider_type?: string // 供应商类型：openai, anthropic, openai_compatible
+}
+
+export interface OpenAIModelsResponse {
+  data: OpenAIModelInfo[]
+}
+
+// ========== Anthropic 协议类型 ==========
+
+export interface AnthropicMessage {
+  role: 'user' | 'assistant'
+  content: string | AnthropicContentBlock[]
+}
+
+export interface AnthropicContentBlock {
+  type: 'text' | 'thinking' | 'image' | 'tool_use' | 'tool_result'
+  text?: string
+  thinking?: string // thinking 类型的内容
+  source?: {
+    type: 'base64'
+    media_type: string
+    data: string
+  }
+}
+
+export interface AnthropicRequest {
+  model: string
+  messages: AnthropicMessage[]
+  max_tokens: number
+  system?: string
+  stream?: boolean
+  temperature?: number
+  top_p?: number
+  stop_sequences?: string[]
+}
+
+export interface AnthropicResponse {
+  id: string
+  type: 'message'
+  role: 'assistant'
+  model: string
+  content: AnthropicContentBlock[]
+  stop_reason: string | null
+  stop_sequence: string | null
+  usage: {
+    input_tokens: number
+    output_tokens: number
+  }
+}
+
+// Anthropic 流式事件类型
+export interface AnthropicStreamEvent {
+  type: string
+  index?: number
+  message?: AnthropicResponse
+  delta?: {
+    type: string // text_delta, thinking_delta
+    text?: string
+    thinking?: string // thinking_delta 类型的内容
+    stop_reason?: string
+  }
+  content_block?: AnthropicContentBlock
+  usage?: {
+    input_tokens: number
+    output_tokens: number
+  }
 }

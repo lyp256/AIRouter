@@ -2,8 +2,8 @@ import api from './index'
 import type { User, UserKey, ApiResponse, PaginatedResponse } from './types'
 
 export const userApi = {
-  list(page = 1): Promise<PaginatedResponse<User>> {
-    return api.get('/users', { params: { page } })
+  list(page = 1, pageSize = 20): Promise<PaginatedResponse<User>> {
+    return api.get('/users', { params: { page, page_size: pageSize } })
   },
 
   get(id: string): Promise<ApiResponse<User> & { keys: UserKey[] }> {

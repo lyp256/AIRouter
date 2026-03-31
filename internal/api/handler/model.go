@@ -1,23 +1,33 @@
 package handler
 
 import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lyp256/airouter/internal/model"
+	"github.com/lyp256/airouter/internal/provider"
+	"github.com/lyp256/airouter/internal/service"
+	"github.com/lyp256/airouter/pkg/anthropic"
+	"github.com/lyp256/airouter/pkg/openai"
 	"gorm.io/gorm"
 )
 
 // ModelHandler 模型处理器
 type ModelHandler struct {
-	db *gorm.DB
+	db               *gorm.DB
+	upstreamSelector *service.UpstreamSelector
 }
 
 // NewModelHandler 创建模型处理器
-func NewModelHandler(db *gorm.DB) *ModelHandler {
-	return &ModelHandler{db: db}
+func NewModelHandler(db *gorm.DB, upstreamSelector *service.UpstreamSelector) *ModelHandler {
+	return &ModelHandler{db: db, upstreamSelector: upstreamSelector}
 }
 
 // ModelWithUpstreams 模型及其上游模型
@@ -30,6 +40,7 @@ type ModelWithUpstreams struct {
 type UpstreamDetail struct {
 	model.Upstream
 	ProviderName    string `json:"provider_name"`
+	ProviderType    string `json:"provider_type"` // 供应商类型：openai, anthropic, openai_compatible
 	ProviderKeyName string `json:"provider_key_name"`
 }
 
@@ -66,6 +77,7 @@ func (h *ModelHandler) GetModel(c *gin.Context) {
 		var provider model.Provider
 		if err := h.db.First(&provider, "id = ?", u.ProviderID).Error; err == nil {
 			detail.ProviderName = provider.Name
+			detail.ProviderType = provider.Type
 		}
 
 		var apiKey model.ProviderKey
@@ -86,11 +98,12 @@ func (h *ModelHandler) GetModel(c *gin.Context) {
 
 // CreateModelRequest 创建模型请求
 type CreateModelRequest struct {
-	Name          string  `json:"name" binding:"required"`
-	Description   string  `json:"description"`
-	InputPrice    float64 `json:"input_price"`
-	OutputPrice   float64 `json:"output_price"`
-	ContextWindow int     `json:"context_window"`
+	Name          string `json:"name" binding:"required"`
+	ProviderType  string `json:"provider_type" binding:"required"` // 供应商类型：openai, anthropic, openai_compatible
+	Description   string `json:"description"`
+	InputPrice    int64  `json:"input_price"`  // 输入价格（纳 BU/1K token）
+	OutputPrice   int64  `json:"output_price"` // 输出价格（纳 BU/1K token）
+	ContextWindow int    `json:"context_window"`
 }
 
 // CreateModel 创建模型
@@ -101,17 +114,25 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 		return
 	}
 
-	// 检查模型名称是否已存在
+	// 验证供应商类型
+	validTypes := map[string]bool{"openai": true, "anthropic": true, "openai_compatible": true}
+	if !validTypes[req.ProviderType] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的供应商类型，可选值：openai, anthropic, openai_compatible"})
+		return
+	}
+
+	// 检查模型名称+类型是否已存在
 	var count int64
-	h.db.Model(&model.Model{}).Where("name = ?", req.Name).Count(&count)
+	h.db.Model(&model.Model{}).Where("name = ? AND provider_type = ?", req.Name, req.ProviderType).Count(&count)
 	if count > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "模型名称已存在"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "相同类型的模型名称已存在"})
 		return
 	}
 
 	m := model.Model{
 		ID:            uuid.New().String(),
 		Name:          req.Name,
+		ProviderType:  req.ProviderType,
 		Description:   req.Description,
 		InputPrice:    req.InputPrice,
 		OutputPrice:   req.OutputPrice,
@@ -135,12 +156,12 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 
 // UpdateModelRequest 更新模型请求
 type UpdateModelRequest struct {
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	InputPrice    *float64 `json:"input_price"`
-	OutputPrice   *float64 `json:"output_price"`
-	ContextWindow *int     `json:"context_window"`
-	Enabled       *bool    `json:"enabled"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	InputPrice    *int64 `json:"input_price"`  // 输入价格（纳 BU/1K token）
+	OutputPrice   *int64 `json:"output_price"` // 输出价格（纳 BU/1K token）
+	ContextWindow *int   `json:"context_window"`
+	Enabled       *bool  `json:"enabled"`
 }
 
 // UpdateModel 更新模型
@@ -267,6 +288,7 @@ func (h *ModelHandler) ListUpstreams(c *gin.Context) {
 		var provider model.Provider
 		if err := h.db.First(&provider, "id = ?", u.ProviderID).Error; err == nil {
 			detail.ProviderName = provider.Name
+			detail.ProviderType = provider.Type
 		}
 
 		var apiKey model.ProviderKey
@@ -295,6 +317,7 @@ func (h *ModelHandler) GetUpstream(c *gin.Context) {
 	var provider model.Provider
 	if err := h.db.First(&provider, "id = ?", u.ProviderID).Error; err == nil {
 		detail.ProviderName = provider.Name
+		detail.ProviderType = provider.Type
 	}
 
 	var apiKey model.ProviderKey
@@ -330,6 +353,7 @@ func (h *ModelHandler) ListModelUpstreams(c *gin.Context) {
 		var provider model.Provider
 		if err := h.db.First(&provider, "id = ?", u.ProviderID).Error; err == nil {
 			detail.ProviderName = provider.Name
+			detail.ProviderType = provider.Type
 		}
 
 		var apiKey model.ProviderKey
@@ -373,6 +397,12 @@ func (h *ModelHandler) CreateUpstream(c *gin.Context) {
 	var provider model.Provider
 	if err := h.db.First(&provider, "id = ?", req.ProviderID).Error; err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "供应商不存在"})
+		return
+	}
+
+	// 检查供应商类型是否与模型类型匹配
+	if provider.Type != m.ProviderType {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "供应商类型与模型类型不匹配，模型类型为 " + m.ProviderType})
 		return
 	}
 
@@ -516,4 +546,304 @@ func (h *ModelHandler) ToggleUpstream(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": u})
+}
+
+// ResetUpstreamStatus 重置上游模型健康状态为 active
+func (h *ModelHandler) ResetUpstreamStatus(c *gin.Context) {
+	id := c.Param("id")
+
+	var u model.Upstream
+	if err := h.db.First(&u, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "上游模型不存在"})
+		return
+	}
+
+	if err := h.db.Model(&u).Updates(map[string]interface{}{
+		"status":     "active",
+		"updated_at": time.Now(),
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "重置失败"})
+		return
+	}
+
+	// 清除选择器缓存，确保下次请求能选到该上游
+	h.upstreamSelector.InvalidateCache(u.ModelID)
+
+	h.db.First(&u, "id = ?", id)
+	c.JSON(http.StatusOK, gin.H{"data": u})
+}
+
+// testUpstreamResult 测试单个上游模型的结果
+type testUpstreamResult struct {
+	Success             bool   `json:"success"`
+	LatencyMs           int64  `json:"latency_ms"`
+	FirstTokenLatencyMs int64  `json:"first_token_latency_ms"`
+	UpstreamID          string `json:"upstream_id"`
+	ProviderName        string `json:"provider_name"`
+	ProviderModel       string `json:"provider_model"`
+	Message             string `json:"message"`
+	ResponseContent     string `json:"response_content,omitempty"`
+}
+
+// doTestUpstream 执行单个上游模型测试（流式请求获取首 Token 延迟）
+func doTestUpstream(ctx context.Context, selection *service.UpstreamSelection) *testUpstreamResult {
+	result := &testUpstreamResult{
+		UpstreamID:    selection.Upstream.ID,
+		ProviderName:  selection.Provider.Name,
+		ProviderModel: selection.Upstream.ProviderModel,
+	}
+
+	startTime := time.Now()
+
+	switch selection.Provider.Type {
+	case "openai", "openai_compatible":
+		client := provider.NewClient(provider.ClientConfig{
+			BaseURL: selection.Provider.BaseURL,
+			APIKey:  selection.DecryptedKey,
+		})
+		apiPath := selection.Provider.APIPath
+		if apiPath == "" {
+			apiPath = "/v1/chat/completions"
+		}
+
+		resp, err := client.DoStream(ctx, provider.Request{
+			Method: "POST",
+			Path:   apiPath,
+			Body: map[string]interface{}{
+				"model":      selection.Upstream.ProviderModel,
+				"messages":   []map[string]string{{"role": "user", "content": "Hi"}},
+				"max_tokens": 5,
+				"stream":     true,
+			},
+		})
+		if err != nil {
+			result.Message = "测试失败: " + err.Error()
+			result.LatencyMs = time.Since(startTime).Milliseconds()
+			return result
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			result.Message = parseOpenAIError(body)
+			result.LatencyMs = time.Since(startTime).Milliseconds()
+			return result
+		}
+
+		// 解析 SSE 流获取首 Token 延迟和内容
+		var firstTokenLatency int64
+		firstTokenRecorded := false
+		var contentBuilder strings.Builder
+
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				break
+			}
+			line = strings.TrimSpace(line)
+			if line == "" || !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				break
+			}
+
+			var chunk openai.StreamChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
+			}
+			for _, choice := range chunk.Choices {
+				if choice.Delta != nil {
+					if !firstTokenRecorded && (choice.Delta.Content != "" || choice.Delta.ReasoningContent != "") {
+						firstTokenLatency = time.Since(startTime).Milliseconds()
+						firstTokenRecorded = true
+					}
+					if choice.Delta.Content != "" {
+						contentBuilder.WriteString(choice.Delta.Content)
+					}
+				}
+			}
+		}
+
+		result.Success = true
+		result.LatencyMs = time.Since(startTime).Milliseconds()
+		result.FirstTokenLatencyMs = firstTokenLatency
+		result.ResponseContent = contentBuilder.String()
+		result.Message = "测试成功"
+
+	case "anthropic":
+		apiPath := selection.Provider.APIPath
+		if apiPath == "" {
+			apiPath = "/v1/messages"
+		}
+		client := provider.NewAnthropicClient(provider.AnthropicConfig{
+			BaseURL: selection.Provider.BaseURL,
+			APIKey:  selection.DecryptedKey,
+			APIPath: apiPath,
+		})
+
+		resp, err := client.MessagesStream(ctx, anthropic.MessagesRequest{
+			Model:     selection.Upstream.ProviderModel,
+			Messages:  []anthropic.Message{{Role: "user", Content: "Hi"}},
+			MaxTokens: 5,
+		})
+		if err != nil {
+			result.Message = "测试失败: " + err.Error()
+			result.LatencyMs = time.Since(startTime).Milliseconds()
+			return result
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			var errResp struct {
+				Error *struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(body, &errResp) == nil && errResp.Error != nil {
+				result.Message = "测试失败: " + errResp.Error.Message
+			} else {
+				result.Message = "测试失败: HTTP " + resp.Status
+			}
+			result.LatencyMs = time.Since(startTime).Milliseconds()
+			return result
+		}
+
+		// 解析 SSE 流获取首 Token 延迟和内容
+		var firstTokenLatency int64
+		firstTokenRecorded := false
+		var contentBuilder strings.Builder
+
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				break
+			}
+			line = strings.TrimSpace(line)
+			if line == "" || !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+
+			var event anthropic.StreamEvent
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				continue
+			}
+			if !firstTokenRecorded && event.Type == "content_block_delta" && event.Delta != nil && (event.Delta.Text != "" || event.Delta.Thinking != "") {
+				firstTokenLatency = time.Since(startTime).Milliseconds()
+				firstTokenRecorded = true
+			}
+			if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Text != "" {
+				contentBuilder.WriteString(event.Delta.Text)
+			}
+		}
+
+		result.Success = true
+		result.LatencyMs = time.Since(startTime).Milliseconds()
+		result.FirstTokenLatencyMs = firstTokenLatency
+		result.ResponseContent = contentBuilder.String()
+		result.Message = "测试成功"
+
+	default:
+		result.Message = "不支持的供应商类型: " + selection.Provider.Type
+		result.LatencyMs = time.Since(startTime).Milliseconds()
+	}
+
+	return result
+}
+
+// parseOpenAIError 解析 OpenAI 错误响应
+func parseOpenAIError(body []byte) string {
+	var errResp openai.ErrorResponse
+	if json.Unmarshal(body, &errResp) == nil && errResp.Message != "" {
+		return "测试失败: " + errResp.Message
+	}
+	return "测试失败: " + string(body)
+}
+
+// TestUpstream 测试上游模型连通性
+func (h *ModelHandler) TestUpstream(c *gin.Context) {
+	id := c.Param("id")
+
+	selection, err := h.upstreamSelector.GetUpstreamSelection(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	result := doTestUpstream(ctx, selection)
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// TestModelUpstreams 批量测试模型的所有上游模型
+func (h *ModelHandler) TestModelUpstreams(c *gin.Context) {
+	modelID := c.Param("id")
+
+	// 检查模型是否存在
+	var m model.Model
+	if err := h.db.First(&m, "id = ?", modelID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "模型不存在"})
+		return
+	}
+
+	// 获取模型的所有上游模型
+	upstreams, err := h.upstreamSelector.GetUpstreamsByModel(modelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询上游模型失败"})
+		return
+	}
+
+	if len(upstreams) == 0 {
+		c.JSON(http.StatusOK, gin.H{"data": []testUpstreamResult{}})
+		return
+	}
+
+	// 并发测试所有上游模型
+	type indexedResult struct {
+		index  int
+		result *testUpstreamResult
+	}
+	ch := make(chan indexedResult, len(upstreams))
+
+	for i, u := range upstreams {
+		go func(idx int, upstream *model.Upstream) {
+			selection, err := h.upstreamSelector.GetUpstreamSelection(upstream.ID)
+			if err != nil {
+				ch <- indexedResult{index: idx, result: &testUpstreamResult{
+					Success:       false,
+					UpstreamID:    upstream.ID,
+					ProviderModel: upstream.ProviderModel,
+					Message:       "获取上游配置失败: " + err.Error(),
+				}}
+				return
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			ch <- indexedResult{index: idx, result: doTestUpstream(ctx, selection)}
+		}(i, u)
+	}
+
+	// 收集结果并保持顺序
+	results := make([]*testUpstreamResult, len(upstreams))
+	for i := 0; i < len(upstreams); i++ {
+		r := <-ch
+		results[r.index] = r.result
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": results})
 }
