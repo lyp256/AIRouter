@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建发布文件
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Go 环境
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装前端依赖
+        run: make web-install
+
+      - name: 构建前端
+        run: make web-build
+
+      - name: 获取版本信息
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: 设置构建信息
+        id: build_info
+        run: echo "BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')" >> $GITHUB_OUTPUT
+
+      # 编译 Linux amd64
+      - name: 编译 linux-amd64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }} -X main.BuildTime=${{ steps.build_info.outputs.BUILD_TIME }}" \
+            -o bin/airouter-linux-amd64 \
+            ./cmd/airouter
+
+      # 编译 Linux arm64
+      - name: 编译 linux-arm64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }} -X main.BuildTime=${{ steps.build_info.outputs.BUILD_TIME }}" \
+            -o bin/airouter-linux-arm64 \
+            ./cmd/airouter
+
+      # 编译 macOS amd64
+      - name: 编译 darwin-amd64
+        run: |
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }} -X main.BuildTime=${{ steps.build_info.outputs.BUILD_TIME }}" \
+            -o bin/airouter-darwin-amd64 \
+            ./cmd/airouter
+
+      # 编译 macOS arm64 (Apple Silicon)
+      - name: 编译 darwin-arm64
+        run: |
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }} -X main.BuildTime=${{ steps.build_info.outputs.BUILD_TIME }}" \
+            -o bin/airouter-darwin-arm64 \
+            ./cmd/airouter
+
+      # 编译 Windows amd64
+      - name: 编译 windows-amd64
+        run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }} -X main.BuildTime=${{ steps.build_info.outputs.BUILD_TIME }}" \
+            -o bin/airouter-windows-amd64.exe \
+            ./cmd/airouter
+
+      # 安装 upx 压缩工具
+      - name: 安装 upx
+        run: sudo apt-get install -y upx
+
+      # 压缩二进制文件（Linux 和 Windows 支持 upx）
+      - name: 使用 upx 压缩二进制文件
+        run: |
+          upx --best bin/airouter-linux-amd64
+          upx --best bin/airouter-linux-arm64
+          upx --best bin/airouter-windows-amd64.exe
+          # macOS 不使用 upx，因为可能导致签名问题
+
+      - name: 显示构建产物
+        run: ls -lh bin/
+
+      - name: 创建压缩包
+        run: |
+          cd bin
+          tar -czvf airouter-linux-amd64.tar.gz airouter-linux-amd64
+          tar -czvf airouter-linux-arm64.tar.gz airouter-linux-arm64
+          tar -czvf airouter-darwin-amd64.tar.gz airouter-darwin-amd64
+          tar -czvf airouter-darwin-arm64.tar.gz airouter-darwin-arm64
+          zip airouter-windows-amd64.zip airouter-windows-amd64.exe
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            bin/airouter-linux-amd64.tar.gz
+            bin/airouter-linux-arm64.tar.gz
+            bin/airouter-darwin-amd64.tar.gz
+            bin/airouter-darwin-arm64.tar.gz
+            bin/airouter-windows-amd64.zip
+
+  release:
+    name: 创建 GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: bin
+
+      - name: 显示产物信息
+        run: ls -lh bin/
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bin/airouter-linux-amd64.tar.gz
+            bin/airouter-linux-arm64.tar.gz
+            bin/airouter-darwin-amd64.tar.gz
+            bin/airouter-darwin-arm64.tar.gz
+            bin/airouter-windows-amd64.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
