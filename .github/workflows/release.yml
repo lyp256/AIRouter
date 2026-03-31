@@ -89,9 +89,9 @@ jobs:
       # 压缩二进制文件（Linux 和 Windows 支持 upx）
       - name: 使用 upx 压缩二进制文件
         run: |
-          upx --best bin/airouter-linux-amd64
-          upx --best bin/airouter-linux-arm64
-          upx --best bin/airouter-windows-amd64.exe
+          upx -9 bin/airouter-linux-amd64
+          upx -9 bin/airouter-linux-arm64
+          upx -9 bin/airouter-windows-amd64.exe
           # macOS 不使用 upx，因为可能导致签名问题
 
       - name: 显示构建产物
