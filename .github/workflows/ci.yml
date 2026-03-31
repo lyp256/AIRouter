@@ -17,7 +17,7 @@ jobs:
       - name: 设置 Go 环境
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.22"
 
       - name: 检查代码格式
         run: |
@@ -46,7 +46,17 @@ jobs:
       - name: 设置 Go 环境
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.22"
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装前端依赖
+        run: make web-install
 
       - name: 安装 upx
         run: sudo apt-get install -y upx
@@ -55,14 +65,14 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: 编译 linux-amd64
+      - name: 编译 linux-amd64（包含前端）
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }} -X main.BuildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
             -o bin/airouter-linux-amd64 \
             ./cmd/airouter
 
-      - name: 编译 linux-arm64
+      - name: 编译 linux-arm64（包含前端）
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
             -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }} -X main.BuildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \

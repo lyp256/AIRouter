@@ -1,5 +1,5 @@
 import api from './index'
-import type { UsageLog, ApiResponse } from './types'
+import type { UsageLog, ApiResponse, FilterOptions } from './types'
 
 export interface DashboardStats {
   today_requests: number
@@ -36,6 +36,8 @@ export interface UserStats {
 export interface LogsResponse {
   data: UsageLog[]
   total: number
+  page: number
+  page_size: number
 }
 
 export const statsApi = {
@@ -55,7 +57,11 @@ export const statsApi = {
     return api.get('/stats/users', { params: { days } })
   },
 
-  logs(params?: { user_id?: string; model?: string; status?: string }): Promise<LogsResponse> {
+  filterOptions(): Promise<ApiResponse<FilterOptions>> {
+    return api.get('/stats/filter-options')
+  },
+
+  logs(params?: { model?: string; provider_type?: string; provider_name?: string; provider_key_id?: string; status?: string; page?: number; page_size?: number }): Promise<LogsResponse> {
     return api.get('/stats/logs', { params })
   }
 }

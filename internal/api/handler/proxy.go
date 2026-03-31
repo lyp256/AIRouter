@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,9 +49,9 @@ func (h *ProxyHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
-	// 获取模型配置
+	// 获取模型配置 - OpenAI 协议只匹配 openai 或 openai_compatible 类型
 	var modelCfg model.Model
-	result := h.db.Where("name = ? AND enabled = ?", req.Model, true).First(&modelCfg)
+	result := h.db.Where("name = ? AND enabled = ? AND provider_type IN ?", req.Model, true, []string{"openai", "openai_compatible"}).First(&modelCfg)
 	if result.Error != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
@@ -165,29 +164,60 @@ func (h *ProxyHandler) handleNormalChat(c *gin.Context, client *provider.Client,
 		Path:   apiPath,
 		Body:   reqBody,
 	})
+	latency := time.Since(startTime).Milliseconds()
+
 	if err != nil {
 		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
 		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
-				"message": "请求上游服务失败",
+				"message": "请求上游服务失败: " + err.Error(),
 				"type":    "upstream_error",
 			},
 		})
 		return
 	}
 
+	// 检查上游错误响应
+	if resp.StatusCode >= 400 {
+		h.logger.Error("上游返回错误",
+			zap.Int("status", resp.StatusCode),
+			zap.String("body", string(resp.Body)),
+			zap.String("request_id", requestID))
+		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		// 尝试解析上游错误响应
+		var upstreamErr openai.ErrorResponse
+		errMsg := string(resp.Body)
+		if err := json.Unmarshal(resp.Body, &upstreamErr); err == nil && upstreamErr.Message != "" {
+			errMsg = upstreamErr.Message
+			c.JSON(resp.StatusCode, gin.H{
+				"error": gin.H{
+					"message": upstreamErr.Message,
+					"type":    upstreamErr.Type,
+					"code":    upstreamErr.Code,
+				},
+			})
+		} else {
+			// 无法解析，原样返回
+			c.Data(resp.StatusCode, "application/json", resp.Body)
+		}
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", errMsg)
+		return
+	}
+
 	// 记录成功
 	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 	h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
-	latency := time.Since(startTime).Milliseconds()
 
 	// 解析响应计算 token
 	var chatResp openai.ChatCompletionResponse
 	if err := json.Unmarshal(resp.Body, &chatResp); err == nil && chatResp.Usage != nil {
 		// 记录使用日志
-		h.logUsage(c, selection, modelCfg.Name, chatResp.Usage, latency, "success", "")
+		h.logUsage(c, selection, &modelCfg, chatResp.Usage, latency, 0, latency, "success", "")
 	}
 
 	// 返回响应
@@ -200,6 +230,10 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 
 	// 确保设置 stream: true
 	reqBody["stream"] = true
+	// 添加 stream_options 以获取 usage 信息
+	reqBody["stream_options"] = map[string]interface{}{
+		"include_usage": true,
+	}
 
 	// 获取 API 路径，如果供应商配置了则使用，否则使用默认路径
 	apiPath := selection.Provider.APIPath
@@ -212,19 +246,62 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 		Path:   apiPath,
 		Body:   reqBody,
 	})
+	latency := time.Since(startTime).Milliseconds()
+
 	if err != nil {
 		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
 		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
-				"message": "请求上游服务失败",
+				"message": "请求上游服务失败: " + err.Error(),
 				"type":    "upstream_error",
 			},
 		})
 		return
 	}
 	defer resp.Body.Close()
+
+	// 检查上游错误响应
+	if resp.StatusCode >= 400 {
+		h.logger.Error("上游返回错误",
+			zap.Int("status", resp.StatusCode),
+			zap.String("request_id", requestID))
+		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		// 读取错误响应体
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		errMsg := "读取上游错误响应失败"
+		if readErr != nil {
+			c.JSON(resp.StatusCode, gin.H{
+				"error": gin.H{
+					"message": errMsg,
+					"type":    "upstream_error",
+				},
+			})
+		} else {
+			// 尝试解析上游错误响应
+			var upstreamErr openai.ErrorResponse
+			if json.Unmarshal(bodyBytes, &upstreamErr) == nil && upstreamErr.Message != "" {
+				errMsg = upstreamErr.Message
+				c.JSON(resp.StatusCode, gin.H{
+					"error": gin.H{
+						"message": upstreamErr.Message,
+						"type":    upstreamErr.Type,
+						"code":    upstreamErr.Code,
+					},
+				})
+			} else {
+				errMsg = string(bodyBytes)
+				// 无法解析，原样返回
+				c.Data(resp.StatusCode, "application/json", bodyBytes)
+			}
+		}
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", errMsg)
+		return
+	}
 
 	// 记录成功
 	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
@@ -240,7 +317,10 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 	reader := bufio.NewReader(resp.Body)
 	flusher, _ := c.Writer.(http.Flusher)
 
-	var totalTokens int
+	var promptTokens, completionTokens int
+	var estimatedTokens int
+	var firstTokenLatency int64
+	firstTokenRecorded := false
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -270,13 +350,28 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 			break
 		}
 
-		// 解析 chunk 计算 token
+		// 解析 chunk
 		var chunk openai.StreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err == nil {
-			// 简单估算 token（实际应从 usage 获取）
+			// 提取 usage 信息（最后一个 chunk）
+			if chunk.Usage != nil {
+				promptTokens = chunk.Usage.PromptTokens
+				completionTokens = chunk.Usage.CompletionTokens
+			}
+			// 如果没有 usage，估算 token
 			for _, choice := range chunk.Choices {
-				if choice.Delta != nil && choice.Delta.Content != "" {
-					totalTokens += len(choice.Delta.Content) / 4 // 粗略估算
+				if choice.Delta != nil {
+					// 记录首 Token 延迟（包含 text 和 reasoning_content）
+					if !firstTokenRecorded && (choice.Delta.Content != "" || choice.Delta.ReasoningContent != "") {
+						firstTokenLatency = time.Since(startTime).Milliseconds()
+						firstTokenRecorded = true
+					}
+					if choice.Delta.Content != "" {
+						estimatedTokens += len(choice.Delta.Content) / 4 // 粗略估算
+					}
+					if choice.Delta.ReasoningContent != "" {
+						estimatedTokens += len(choice.Delta.ReasoningContent) / 4
+					}
 				}
 			}
 		}
@@ -286,13 +381,18 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 		flusher.Flush()
 	}
 
+	// 如果没有从 usage 获取到 token，使用估算值
+	if completionTokens == 0 {
+		completionTokens = estimatedTokens
+	}
+
 	// 记录使用日志
-	latency := time.Since(startTime).Milliseconds()
-	h.logUsage(c, selection, modelCfg.Name, &openai.Usage{
-		PromptTokens:     0,
-		CompletionTokens: totalTokens,
-		TotalTokens:      totalTokens,
-	}, latency, "success", "")
+	totalDuration := time.Since(startTime).Milliseconds()
+	h.logUsage(c, selection, &modelCfg, &openai.Usage{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      promptTokens + completionTokens,
+	}, latency, firstTokenLatency, totalDuration, "success", "")
 }
 
 // Models 模型列表 API
@@ -303,10 +403,11 @@ func (h *ProxyHandler) Models(c *gin.Context) {
 	data := make([]openai.ModelInfo, len(models))
 	for i, m := range models {
 		data[i] = openai.ModelInfo{
-			ID:      m.Name,
-			Object:  "model",
-			Created: m.CreatedAt.Unix(),
-			OwnedBy: "airouter",
+			ID:           m.Name,
+			Object:       "model",
+			Created:      m.CreatedAt.Unix(),
+			OwnedBy:      "airouter",
+			ProviderType: m.ProviderType,
 		}
 	}
 
@@ -326,9 +427,9 @@ func (h *ProxyHandler) Completions(c *gin.Context) {
 		return
 	}
 
-	// 获取模型配置
+	// 获取模型配置 - OpenAI 协议只匹配 openai 或 openai_compatible 类型
 	var modelCfg model.Model
-	result := h.db.Where("name = ? AND enabled = ?", req.Model, true).First(&modelCfg)
+	result := h.db.Where("name = ? AND enabled = ? AND provider_type IN ?", req.Model, true, []string{"openai", "openai_compatible"}).First(&modelCfg)
 	if result.Error != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
@@ -444,29 +545,60 @@ func (h *ProxyHandler) handleNormalCompletion(c *gin.Context, client *provider.C
 		Path:   apiPath,
 		Body:   reqBody,
 	})
+	latency := time.Since(startTime).Milliseconds()
+
 	if err != nil {
 		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
 		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
-				"message": "请求上游服务失败",
+				"message": "请求上游服务失败: " + err.Error(),
 				"type":    "upstream_error",
 			},
 		})
 		return
 	}
 
+	// 检查上游错误响应
+	if resp.StatusCode >= 400 {
+		h.logger.Error("上游返回错误",
+			zap.Int("status", resp.StatusCode),
+			zap.String("body", string(resp.Body)),
+			zap.String("request_id", requestID))
+		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		// 尝试解析上游错误响应
+		var upstreamErr openai.ErrorResponse
+		errMsg := string(resp.Body)
+		if err := json.Unmarshal(resp.Body, &upstreamErr); err == nil && upstreamErr.Message != "" {
+			errMsg = upstreamErr.Message
+			c.JSON(resp.StatusCode, gin.H{
+				"error": gin.H{
+					"message": upstreamErr.Message,
+					"type":    upstreamErr.Type,
+					"code":    upstreamErr.Code,
+				},
+			})
+		} else {
+			// 无法解析，原样返回
+			c.Data(resp.StatusCode, "application/json", resp.Body)
+		}
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", errMsg)
+		return
+	}
+
 	// 记录成功
 	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 	h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
-	latency := time.Since(startTime).Milliseconds()
 
 	// 解析响应计算 token
 	var compResp openai.CompletionResponse
 	if err := json.Unmarshal(resp.Body, &compResp); err == nil && compResp.Usage != nil {
 		// 记录使用日志
-		h.logUsage(c, selection, modelCfg.Name, compResp.Usage, latency, "success", "")
+		h.logUsage(c, selection, &modelCfg, compResp.Usage, latency, 0, latency, "success", "")
 	}
 
 	// 返回响应
@@ -479,6 +611,10 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 
 	// 确保设置 stream: true
 	reqBody["stream"] = true
+	// 添加 stream_options 以获取 usage 信息
+	reqBody["stream_options"] = map[string]interface{}{
+		"include_usage": true,
+	}
 
 	// 获取 API 路径，如果供应商配置了则使用，否则使用默认路径
 	apiPath := selection.Provider.APIPath
@@ -491,19 +627,62 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 		Path:   apiPath,
 		Body:   reqBody,
 	})
+	latency := time.Since(startTime).Milliseconds()
+
 	if err != nil {
 		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
 		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
-				"message": "请求上游服务失败",
+				"message": "请求上游服务失败: " + err.Error(),
 				"type":    "upstream_error",
 			},
 		})
 		return
 	}
 	defer resp.Body.Close()
+
+	// 检查上游错误响应
+	if resp.StatusCode >= 400 {
+		h.logger.Error("上游返回错误",
+			zap.Int("status", resp.StatusCode),
+			zap.String("request_id", requestID))
+		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		// 读取错误响应体
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		errMsg := "读取上游错误响应失败"
+		if readErr != nil {
+			c.JSON(resp.StatusCode, gin.H{
+				"error": gin.H{
+					"message": errMsg,
+					"type":    "upstream_error",
+				},
+			})
+		} else {
+			// 尝试解析上游错误响应
+			var upstreamErr openai.ErrorResponse
+			if json.Unmarshal(bodyBytes, &upstreamErr) == nil && upstreamErr.Message != "" {
+				errMsg = upstreamErr.Message
+				c.JSON(resp.StatusCode, gin.H{
+					"error": gin.H{
+						"message": upstreamErr.Message,
+						"type":    upstreamErr.Type,
+						"code":    upstreamErr.Code,
+					},
+				})
+			} else {
+				errMsg = string(bodyBytes)
+				// 无法解析，原样返回
+				c.Data(resp.StatusCode, "application/json", bodyBytes)
+			}
+		}
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", errMsg)
+		return
+	}
 
 	// 记录成功
 	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
@@ -519,7 +698,10 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 	reader := bufio.NewReader(resp.Body)
 	flusher, _ := c.Writer.(http.Flusher)
 
-	var totalTokens int
+	var promptTokens, completionTokens int
+	var estimatedTokens int
+	var firstTokenLatency int64
+	firstTokenRecorded := false
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -549,11 +731,19 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 			break
 		}
 
-		// 解析 chunk 计算 token
+		// 解析 chunk
 		var chunk openai.CompletionStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err == nil {
+			// Completions API 的 chunk 没有 usage，只能估算
 			for _, choice := range chunk.Choices {
-				totalTokens += len(choice.Text) / 4 // 粗略估算
+				if choice.Text != "" {
+					// 记录首 Token 延迟
+					if !firstTokenRecorded {
+						firstTokenLatency = time.Since(startTime).Milliseconds()
+						firstTokenRecorded = true
+					}
+					estimatedTokens += len(choice.Text) / 4
+				}
 			}
 		}
 
@@ -562,13 +752,16 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 		flusher.Flush()
 	}
 
+	// Completions API 不支持 stream_options，使用估算值
+	completionTokens = estimatedTokens
+
 	// 记录使用日志
-	latency := time.Since(startTime).Milliseconds()
-	h.logUsage(c, selection, modelCfg.Name, &openai.Usage{
-		PromptTokens:     0,
-		CompletionTokens: totalTokens,
-		TotalTokens:      totalTokens,
-	}, latency, "success", "")
+	totalDuration := time.Since(startTime).Milliseconds()
+	h.logUsage(c, selection, &modelCfg, &openai.Usage{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      promptTokens + completionTokens,
+	}, latency, firstTokenLatency, totalDuration, "success", "")
 }
 
 // Embeddings Embeddings API
@@ -584,9 +777,9 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 		return
 	}
 
-	// 获取模型配置
+	// 获取模型配置 - Embeddings 只匹配 openai 或 openai_compatible 类型
 	var modelCfg model.Model
-	result := h.db.Where("name = ? AND enabled = ?", req.Model, true).First(&modelCfg)
+	result := h.db.Where("name = ? AND enabled = ? AND provider_type IN ?", req.Model, true, []string{"openai", "openai_compatible"}).First(&modelCfg)
 	if result.Error != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
@@ -640,56 +833,89 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 		Path:   apiPath,
 		Body:   reqBody,
 	})
+	latency := time.Since(startTime).Milliseconds()
+
 	if err != nil {
+		h.logger.Error("请求上游失败", zap.Error(err))
 		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
-				"message": "请求上游服务失败",
+				"message": "请求上游服务失败: " + err.Error(),
 				"type":    "upstream_error",
 			},
 		})
 		return
 	}
 
+	// 检查上游错误响应
+	if resp.StatusCode >= 400 {
+		h.logger.Error("上游返回错误",
+			zap.Int("status", resp.StatusCode),
+			zap.String("body", string(resp.Body)))
+		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		// 尝试解析上游错误响应
+		var upstreamErr openai.ErrorResponse
+		errMsg := string(resp.Body)
+		if err := json.Unmarshal(resp.Body, &upstreamErr); err == nil && upstreamErr.Message != "" {
+			errMsg = upstreamErr.Message
+			c.JSON(resp.StatusCode, gin.H{
+				"error": gin.H{
+					"message": upstreamErr.Message,
+					"type":    upstreamErr.Type,
+					"code":    upstreamErr.Code,
+				},
+			})
+		} else {
+			// 无法解析，原样返回
+			c.Data(resp.StatusCode, "application/json", resp.Body)
+		}
+		// 记录失败日志
+		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", errMsg)
+		return
+	}
+
 	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 	h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
-	latency := time.Since(startTime).Milliseconds()
 
 	// 记录使用日志
 	var embResp openai.EmbeddingResponse
 	if err := json.Unmarshal(resp.Body, &embResp); err == nil && embResp.Usage != nil {
-		h.logUsage(c, selection, modelCfg.Name, embResp.Usage, latency, "success", "")
+		h.logUsage(c, selection, &modelCfg, embResp.Usage, latency, 0, latency, "success", "")
 	}
 
 	c.Data(resp.StatusCode, "application/json", resp.Body)
 }
 
 // logUsage 记录使用日志
-func (h *ProxyHandler) logUsage(c *gin.Context, selection *service.UpstreamSelection, modelName string, usage *openai.Usage, latency int64, status, errMsg string) {
+func (h *ProxyHandler) logUsage(c *gin.Context, selection *service.UpstreamSelection, modelCfg *model.Model, usage *openai.Usage, latency int64, firstTokenLatency int64, totalDuration int64, status, errMsg string) {
 	userID := middleware.GetUserID(c)
 	userKeyID := middleware.GetUserKeyID(c)
 
-	// 计算成本（简化版）
-	cost := float64(usage.PromptTokens+usage.CompletionTokens) * 0.0001
+	// 使用模型配置的价格计算费用（纳 BU）
+	inputCost := int64(usage.PromptTokens) * modelCfg.InputPrice / 1000
+	outputCost := int64(usage.CompletionTokens) * modelCfg.OutputPrice / 1000
+	cost := inputCost + outputCost
 
 	log := model.UsageLog{
-		ID:            requestID(),
-		UserID:        userID,
-		UserKeyID:     userKeyID,
-		UpstreamID:    selection.Upstream.ID,
-		ProviderKeyID: selection.ProviderKey.ID,
-		Model:         modelName,
-		ProviderModel: selection.Upstream.ProviderModel,
-		ProviderName:  selection.Provider.Name,
-		InputTokens:   usage.PromptTokens,
-		OutputTokens:  usage.CompletionTokens,
-		Cost:          cost,
-		Latency:       int(latency),
-		Status:        status,
-		ErrorMessage:  errMsg,
-		RequestID:     middleware.GetRequestID(c),
-		CreatedAt:     time.Now(),
+		ID:                requestID(),
+		UserID:            userID,
+		UserKeyID:         userKeyID,
+		UpstreamID:        selection.Upstream.ID,
+		ProviderKeyID:     selection.ProviderKey.ID,
+		Model:             modelCfg.Name, // 保留用于索引优化
+		InputTokens:       usage.PromptTokens,
+		OutputTokens:      usage.CompletionTokens,
+		Cost:              cost,
+		Latency:           int(latency),
+		FirstTokenLatency: int(firstTokenLatency),
+		TotalDuration:     int(totalDuration),
+		Status:            status,
+		ErrorMessage:      errMsg,
+		RequestID:         middleware.GetRequestID(c),
+		CreatedAt:         time.Now(),
 	}
 
 	h.db.Create(&log)
@@ -697,18 +923,6 @@ func (h *ProxyHandler) logUsage(c *gin.Context, selection *service.UpstreamSelec
 
 func requestID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
-}
-
-// parseSSE 解析 SSE 数据
-func parseSSE(data []byte) (string, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
-			return strings.TrimPrefix(line, "data: "), nil
-		}
-	}
-	return "", scanner.Err()
 }
 
 // AnthropicMessages Anthropic Messages API
@@ -722,9 +936,9 @@ func (h *ProxyHandler) AnthropicMessages(c *gin.Context) {
 		return
 	}
 
-	// 获取模型配置
+	// 获取模型配置 - Anthropic 协议只匹配 anthropic 类型
 	var modelCfg model.Model
-	result := h.db.Where("name = ? AND enabled = ?", req.Model, true).First(&modelCfg)
+	result := h.db.Where("name = ? AND enabled = ? AND provider_type = ?", req.Model, true, "anthropic").First(&modelCfg)
 	if result.Error != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"type":    "invalid_request_error",
@@ -746,24 +960,28 @@ func (h *ProxyHandler) AnthropicMessages(c *gin.Context) {
 	startTime := time.Now()
 	requestID := middleware.GetRequestID(c)
 
-	// 判断供应商类型
-	if selection.Provider.Type == "anthropic" {
-		// 使用原生 Anthropic 客户端
-		h.handleAnthropicNative(c, &req, selection, &modelCfg, startTime, requestID)
-	} else {
-		// 使用 OpenAI 兼容模式转换
-		h.handleAnthropicViaOpenAI(c, &req, selection, &modelCfg, startTime, requestID)
-	}
+	// 使用原生 Anthropic 客户端
+	h.handleAnthropicNative(c, &req, selection, &modelCfg, startTime, requestID)
 }
 
 // handleAnthropicNative 使用原生 Anthropic API 处理
 func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.MessagesRequest,
 	selection *service.UpstreamSelection, modelCfg *model.Model, startTime time.Time, requestID string) {
 
+	// 获取 API 路径，如果供应商配置了则使用，否则使用默认路径
+	apiPath := selection.Provider.APIPath
+	if apiPath == "" {
+		apiPath = "/v1/messages"
+	}
+
 	client := provider.NewAnthropicClient(provider.AnthropicConfig{
 		BaseURL: selection.Provider.BaseURL,
 		APIKey:  selection.DecryptedKey,
+		APIPath: apiPath,
 	})
+
+	// 替换为上游实际模型名
+	req.Model = selection.Upstream.ProviderModel
 
 	// 处理流式请求
 	if req.Stream {
@@ -773,10 +991,14 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 
 	// 非流式请求
 	resp, err := client.Messages(c.Request.Context(), *req)
+	latency := time.Since(startTime).Milliseconds()
+
 	if err != nil {
 		h.logger.Error("请求 Anthropic 失败", zap.Error(err), zap.String("request_id", requestID))
 		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
+		// 记录失败日志
+		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"type":    "upstream_error",
 			"message": "请求上游服务失败: " + err.Error(),
@@ -786,15 +1008,14 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 
 	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 	h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
-	latency := time.Since(startTime).Milliseconds()
 
 	// 记录使用日志
 	if resp.Usage != nil {
-		h.logUsage(c, selection, modelCfg.Name, &openai.Usage{
+		h.logUsage(c, selection, modelCfg, &openai.Usage{
 			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		}, latency, "success", "")
+		}, latency, 0, latency, "success", "")
 	}
 
 	c.JSON(http.StatusOK, resp)
@@ -806,10 +1027,14 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 	startTime time.Time, requestID string) {
 
 	resp, err := client.MessagesStream(c.Request.Context(), *req)
+	latency := time.Since(startTime).Milliseconds()
+
 	if err != nil {
 		h.logger.Error("请求 Anthropic 失败", zap.Error(err), zap.String("request_id", requestID))
 		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
+		// 记录失败日志
+		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"type":    "upstream_error",
 			"message": "请求上游服务失败: " + err.Error(),
@@ -817,6 +1042,40 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 		return
 	}
 	defer resp.Body.Close()
+
+	// 检查上游错误响应
+	if resp.StatusCode >= 400 {
+		h.logger.Error("上游返回错误",
+			zap.Int("status", resp.StatusCode),
+			zap.String("request_id", requestID))
+		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		// 读取错误响应体
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		errMsg := "读取上游错误响应失败"
+		if readErr != nil {
+			c.JSON(resp.StatusCode, gin.H{
+				"type":    "upstream_error",
+				"message": errMsg,
+			})
+		} else {
+			// 尝试解析上游错误响应
+			var upstreamErr anthropic.ErrorResponse
+			if json.Unmarshal(bodyBytes, &upstreamErr) == nil && upstreamErr.Message != "" {
+				errMsg = upstreamErr.Message
+				c.JSON(resp.StatusCode, gin.H{
+					"type":    upstreamErr.Type,
+					"message": upstreamErr.Message,
+				})
+			} else {
+				errMsg = string(bodyBytes)
+				// 无法解析，原样返回
+				c.Data(resp.StatusCode, "application/json", bodyBytes)
+			}
+		}
+		// 记录失败日志
+		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", errMsg)
+		return
+	}
 
 	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 	h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
@@ -831,7 +1090,9 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 	reader := bufio.NewReader(resp.Body)
 	flusher, _ := c.Writer.(http.Flusher)
 
-	var totalTokens int
+	var promptTokens, completionTokens int
+	var firstTokenLatency int64
+	firstTokenRecorded := false
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -854,14 +1115,25 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 
 		data := strings.TrimPrefix(line, "data: ")
 
-		// 解析事件计算 token
+		// 解析事件提取 token 信息
 		var event anthropic.StreamEvent
 		if err := json.Unmarshal([]byte(data), &event); err == nil {
-			if event.Type == "content_block_delta" && event.Delta != nil {
-				totalTokens += len(event.Delta.Text) / 4
+			// 从 message_start 事件获取 input_tokens
+			if event.Type == "message_start" && event.Message != nil && event.Message.Usage != nil {
+				promptTokens = event.Message.Usage.InputTokens
 			}
+			// 从 message_delta 事件获取 token（智谱等 API 在此返回完整统计）
 			if event.Type == "message_delta" && event.DeltaUsage != nil {
-				totalTokens = event.DeltaUsage.OutputTokens
+				// 如果 message_delta 包含 input_tokens，使用它（覆盖 message_start 的值）
+				if event.DeltaUsage.InputTokens > 0 {
+					promptTokens = event.DeltaUsage.InputTokens
+				}
+				completionTokens = event.DeltaUsage.OutputTokens
+			}
+			// 记录首 Token 延迟（在 content_block_delta 事件中，包含 text 和 thinking）
+			if !firstTokenRecorded && event.Type == "content_block_delta" && event.Delta != nil && (event.Delta.Text != "" || event.Delta.Thinking != "") {
+				firstTokenLatency = time.Since(startTime).Milliseconds()
+				firstTokenRecorded = true
 			}
 		}
 
@@ -871,249 +1143,10 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 	}
 
 	// 记录使用日志
-	latency := time.Since(startTime).Milliseconds()
-	h.logUsage(c, selection, modelCfg.Name, &openai.Usage{
-		PromptTokens:     0,
-		CompletionTokens: totalTokens,
-		TotalTokens:      totalTokens,
-	}, latency, "success", "")
-}
-
-// handleAnthropicViaOpenAI 通过 OpenAI 兼容模式处理 Anthropic 请求
-func (h *ProxyHandler) handleAnthropicViaOpenAI(c *gin.Context, req *anthropic.MessagesRequest,
-	selection *service.UpstreamSelection, modelCfg *model.Model, startTime time.Time, requestID string) {
-
-	// 转换请求格式
-	messages := provider.ConvertToOpenAI(req)
-
-	openAIReq := map[string]interface{}{
-		"model":    selection.Upstream.ProviderModel,
-		"messages": messages,
-	}
-	if req.MaxTokens > 0 {
-		openAIReq["max_tokens"] = req.MaxTokens
-	}
-	if req.Temperature != nil {
-		openAIReq["temperature"] = *req.Temperature
-	}
-	if req.TopP != nil {
-		openAIReq["top_p"] = *req.TopP
-	}
-	if len(req.StopSequences) > 0 {
-		openAIReq["stop"] = req.StopSequences
-	}
-
-	client := provider.NewClient(provider.ClientConfig{
-		BaseURL: selection.Provider.BaseURL,
-		APIKey:  selection.DecryptedKey,
-	})
-
-	// 获取 API 路径，如果供应商配置了则使用，否则使用默认路径
-	apiPath := selection.Provider.APIPath
-	if apiPath == "" {
-		apiPath = "/v1/chat/completions"
-	}
-
-	// 处理流式请求
-	if req.Stream {
-		h.handleAnthropicStreamViaOpenAI(c, client, openAIReq, selection, modelCfg, startTime, requestID, req.Model, apiPath)
-		return
-	}
-
-	// 非流式请求
-	resp, err := client.Do(c.Request.Context(), provider.Request{
-		Method: "POST",
-		Path:   apiPath,
-		Body:   openAIReq,
-	})
-	if err != nil {
-		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
-		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
-		c.JSON(http.StatusBadGateway, gin.H{
-			"type":    "upstream_error",
-			"message": "请求上游服务失败: " + err.Error(),
-		})
-		return
-	}
-
-	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
-	latency := time.Since(startTime).Milliseconds()
-
-	// 转换响应格式
-	var openAIResp map[string]interface{}
-	if err := json.Unmarshal(resp.Body, &openAIResp); err == nil {
-		anthropicResp, _ := provider.ConvertFromOpenAI(openAIResp)
-		anthropicResp.Model = req.Model
-
-		// 记录使用日志
-		if anthropicResp.Usage != nil {
-			h.logUsage(c, selection, modelCfg.Name, &openai.Usage{
-				PromptTokens:     anthropicResp.Usage.InputTokens,
-				CompletionTokens: anthropicResp.Usage.OutputTokens,
-				TotalTokens:      anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
-			}, latency, "success", "")
-		}
-
-		c.JSON(http.StatusOK, anthropicResp)
-		return
-	}
-
-	c.Data(resp.StatusCode, "application/json", resp.Body)
-}
-
-// handleAnthropicStreamViaOpenAI 通过 OpenAI 兼容模式处理 Anthropic 流式请求
-func (h *ProxyHandler) handleAnthropicStreamViaOpenAI(c *gin.Context, client *provider.Client,
-	reqBody map[string]interface{}, selection *service.UpstreamSelection, modelCfg *model.Model,
-	startTime time.Time, requestID string, modelName string, apiPath string) {
-
-	reqBody["stream"] = true
-
-	resp, err := client.DoStream(c.Request.Context(), provider.Request{
-		Method: "POST",
-		Path:   apiPath,
-		Body:   reqBody,
-	})
-	if err != nil {
-		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
-		h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
-		c.JSON(http.StatusBadGateway, gin.H{
-			"type":    "upstream_error",
-			"message": "请求上游服务失败: " + err.Error(),
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
-
-	// 设置响应头
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("X-Request-ID", requestID)
-
-	// 流式传输 - 转换 OpenAI 格式为 Anthropic 格式
-	reader := bufio.NewReader(resp.Body)
-	flusher, _ := c.Writer.(http.Flusher)
-
-	messageID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
-	blockIndex := 0
-	var totalTokens int
-
-	// 发送 message_start 事件
-	startEvent := anthropic.MessageStartEvent{
-		Type: "message_start",
-		Message: anthropic.MessagesResponse{
-			ID:    messageID,
-			Type:  "message",
-			Role:  "assistant",
-			Model: modelName,
-			Usage: &anthropic.Usage{},
-		},
-	}
-	startBytes, _ := json.Marshal(startEvent)
-	fmt.Fprintf(c.Writer, "data: %s\n\n", string(startBytes))
-	flusher.Flush()
-
-	// 发送 content_block_start 事件
-	blockStartEvent := anthropic.ContentBlockStartEvent{
-		Type:  "content_block_start",
-		Index: blockIndex,
-		ContentBlock: anthropic.ContentBlock{
-			Type: "text",
-			Text: "",
-		},
-	}
-	blockBytes, _ := json.Marshal(blockStartEvent)
-	fmt.Fprintf(c.Writer, "data: %s\n\n", string(blockBytes))
-	flusher.Flush()
-
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			h.logger.Error("读取流响应失败", zap.Error(err))
-			break
-		}
-
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
-		if data == "[DONE]" {
-			// 发送 content_block_stop 事件
-			blockStopEvent := anthropic.ContentBlockStopEvent{
-				Type:  "content_block_stop",
-				Index: blockIndex,
-			}
-			stopBytes, _ := json.Marshal(blockStopEvent)
-			fmt.Fprintf(c.Writer, "data: %s\n\n", string(stopBytes))
-			flusher.Flush()
-
-			// 发送 message_delta 事件
-			deltaEvent := anthropic.MessageDeltaEvent{
-				Type: "message_delta",
-				Delta: anthropic.StreamDelta{
-					StopReason: "end_turn",
-				},
-				Usage: anthropic.DeltaUsage{
-					OutputTokens: totalTokens,
-				},
-			}
-			deltaBytes, _ := json.Marshal(deltaEvent)
-			fmt.Fprintf(c.Writer, "data: %s\n\n", string(deltaBytes))
-			flusher.Flush()
-
-			// 发送 message_stop 事件
-			msgStopEvent := anthropic.MessageStopEvent{Type: "message_stop"}
-			msgStopBytes, _ := json.Marshal(msgStopEvent)
-			fmt.Fprintf(c.Writer, "data: %s\n\n", string(msgStopBytes))
-			flusher.Flush()
-			break
-		}
-
-		// 解析 OpenAI chunk
-		var chunk openai.StreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err == nil {
-			for _, choice := range chunk.Choices {
-				if choice.Delta != nil && choice.Delta.Content != "" {
-					totalTokens += len(choice.Delta.Content) / 4
-
-					// 发送 content_block_delta 事件
-					deltaEvent := anthropic.ContentBlockDeltaEvent{
-						Type:  "content_block_delta",
-						Index: blockIndex,
-						Delta: anthropic.StreamDelta{
-							Type: "text_delta",
-							Text: choice.Delta.Content,
-						},
-					}
-					deltaBytes, _ := json.Marshal(deltaEvent)
-					fmt.Fprintf(c.Writer, "data: %s\n\n", string(deltaBytes))
-					flusher.Flush()
-				}
-			}
-		}
-	}
-
-	// 记录使用日志
-	latency := time.Since(startTime).Milliseconds()
-	h.logUsage(c, selection, modelCfg.Name, &openai.Usage{
-		PromptTokens:     0,
-		CompletionTokens: totalTokens,
-		TotalTokens:      totalTokens,
-	}, latency, "success", "")
+	totalDuration := time.Since(startTime).Milliseconds()
+	h.logUsage(c, selection, modelCfg, &openai.Usage{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      promptTokens + completionTokens,
+	}, latency, firstTokenLatency, totalDuration, "success", "")
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sort"
 	"sync"
@@ -205,6 +206,36 @@ func (s *UpstreamSelector) UpdateQuotaUsed(apiKeyID string, delta int64) error {
 	return s.db.Model(&model.ProviderKey{}).
 		Where("id = ?", apiKeyID).
 		UpdateColumn("quota_used", gorm.Expr("quota_used + ?", delta)).Error
+}
+
+// GetUpstreamSelection 根据 upstreamID 获取完整的选择信息（用于测试）
+func (s *UpstreamSelector) GetUpstreamSelection(upstreamID string) (*UpstreamSelection, error) {
+	var upstream model.Upstream
+	if err := s.db.First(&upstream, "id = ?", upstreamID).Error; err != nil {
+		return nil, fmt.Errorf("上游模型不存在: %w", err)
+	}
+
+	var provider model.Provider
+	if err := s.db.First(&provider, "id = ?", upstream.ProviderID).Error; err != nil {
+		return nil, fmt.Errorf("供应商不存在: %w", err)
+	}
+
+	var apiKey model.ProviderKey
+	if err := s.db.First(&apiKey, "id = ?", upstream.ProviderKeyID).Error; err != nil {
+		return nil, fmt.Errorf("供应商密钥不存在: %w", err)
+	}
+
+	decryptedKey, err := s.encryptor.Decrypt(apiKey.Key)
+	if err != nil {
+		return nil, fmt.Errorf("解密密钥失败: %w", err)
+	}
+
+	return &UpstreamSelection{
+		Upstream:     &upstream,
+		Provider:     &provider,
+		ProviderKey:  &apiKey,
+		DecryptedKey: decryptedKey,
+	}, nil
 }
 
 // InvalidateCache 使缓存失效

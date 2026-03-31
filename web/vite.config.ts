@@ -10,6 +10,15 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url))
     }
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'markdown-vendor': ['highlight.js/lib/core', 'marked']
+        }
+      }
+    }
+  },
   server: {
     host: '0.0.0.0',
     port: 3000,

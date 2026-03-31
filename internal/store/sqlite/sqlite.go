@@ -36,6 +36,9 @@ func Init(dsn string) (*gorm.DB, error) {
 	if err := migrateAPIPath(db); err != nil {
 		return nil, err
 	}
+	if err := migrateModelProviderType(db); err != nil {
+		return nil, err
+	}
 
 	return db, nil
 }
@@ -141,6 +144,45 @@ func migrateAPIPath(db *gorm.DB) error {
 		if err != nil {
 			// 忽略删除失败的情况，不影响功能
 			return nil
+		}
+	}
+
+	return nil
+}
+
+// migrateModelProviderType 迁移模型的 provider_type 字段
+func migrateModelProviderType(db *gorm.DB) error {
+	// 检查 models 表是否已有 provider_type 列
+	var hasColumn int
+	err := db.Raw("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name = 'provider_type'").Scan(&hasColumn).Error
+	if err != nil {
+		return err
+	}
+
+	if hasColumn == 0 {
+		// 添加 provider_type 列，默认值为 anthropic
+		err = db.Exec("ALTER TABLE models ADD COLUMN provider_type VARCHAR(32) DEFAULT 'anthropic'").Error
+		if err != nil {
+			return err
+		}
+
+		// 从上游模型推断并填充 provider_type
+		err = db.Exec(`
+			UPDATE models SET provider_type = (
+				SELECT p.type FROM upstreams u
+				JOIN providers p ON u.provider_id = p.id
+				WHERE u.model_id = models.id
+				AND u.enabled = 1
+				ORDER BY u.priority DESC, u.weight DESC
+				LIMIT 1
+			)
+			WHERE EXISTS (
+				SELECT 1 FROM upstreams u
+				WHERE u.model_id = models.id
+			)
+		`).Error
+		if err != nil {
+			return err
 		}
 	}
 

@@ -16,6 +16,7 @@ import (
 	"github.com/lyp256/airouter/internal/config"
 	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/service"
+	"github.com/lyp256/airouter/internal/static"
 	"github.com/lyp256/airouter/internal/store/sqlite"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -65,7 +66,7 @@ func main() {
 	authHandler := handler.NewAuthHandler(db, jwtCfg)
 	proxyHandler := handler.NewProxyHandler(db, logger, upstreamSelector)
 	providerHandler := handler.NewProviderHandler(db, encryptor)
-	modelHandler := handler.NewModelHandler(db)
+	modelHandler := handler.NewModelHandler(db, upstreamSelector)
 	userHandler := handler.NewUserHandler(db, encryptor)
 	statsHandler := handler.NewStatsHandler(db)
 
@@ -184,6 +185,9 @@ func setupRouter(cfg *config.Config, db *gorm.DB, encryptor *crypto.Encryptor, l
 		api.PUT("/upstreams/:id", requireAdmin, modelHandler.UpdateUpstream)
 		api.DELETE("/upstreams/:id", requireAdmin, modelHandler.DeleteUpstream)
 		api.POST("/upstreams/:id/toggle", requireAdmin, modelHandler.ToggleUpstream)
+		api.POST("/upstreams/:id/reset-status", requireAdmin, modelHandler.ResetUpstreamStatus)
+		api.POST("/upstreams/:id/test", requireAdmin, modelHandler.TestUpstream)
+		api.POST("/models/:id/test-upstreams", requireAdmin, modelHandler.TestModelUpstreams)
 
 		// 用户管理 - 仅管理员
 		api.GET("/users", requireAdmin, userHandler.ListUsers)
@@ -208,12 +212,45 @@ func setupRouter(cfg *config.Config, db *gorm.DB, encryptor *crypto.Encryptor, l
 		api.GET("/stats/models", requireAdmin, statsHandler.GetModelStats)
 		api.GET("/stats/users", requireAdmin, statsHandler.GetUserStats)
 		api.GET("/stats/logs", requireAdmin, statsHandler.UsageLogList)
+		api.GET("/stats/filter-options", requireAdmin, statsHandler.GetFilterOptions)
 	}
 
 	// ========== 健康检查 ==========
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	// ========== 静态文件服务 ==========
+	staticHandler, err := static.NewHandler()
+	if err != nil {
+		logger.Warn("静态文件处理器初始化失败，前端服务不可用", zap.Error(err))
+	} else {
+		// SPA fallback：所有未匹配的路由返回 index.html
+		router.NoRoute(func(c *gin.Context) {
+			// 如果是 API 路径但未匹配到任何路由，返回 404
+			if static.IsAPIPath(c.Request.URL.Path) {
+				c.JSON(http.StatusNotFound, gin.H{
+					"error": "API endpoint not found",
+				})
+				return
+			}
+			// 非 API 路径，返回 index.html（SPA fallback）
+			staticHandler.ServeIndexHTML(c)
+		})
+
+		// 静态资源路由（带缓存）
+		router.GET("/assets/*filepath", func(c *gin.Context) {
+			staticHandler.ServeStatic(c)
+		})
+
+		// 其他静态文件路由
+		router.GET("/favicon.svg", func(c *gin.Context) {
+			staticHandler.ServeStatic(c)
+		})
+		router.GET("/icons.svg", func(c *gin.Context) {
+			staticHandler.ServeStatic(c)
+		})
+	}
 
 	return router
 }

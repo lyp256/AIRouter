@@ -1,5 +1,5 @@
 import { useUserStore } from '@/stores/user'
-import type { ChatMessage, ChatRequest, ChatResponse } from './types'
+import type { ChatMessage, ChatRequest, ChatResponse, AnthropicRequest, AnthropicStreamEvent } from './types'
 
 /**
  * 发送聊天请求（流式响应）
@@ -11,7 +11,8 @@ export async function chatStream(
   onChunk: (text: string) => void,
   onError: (error: Error) => void,
   onComplete: () => void,
-  onReasoning?: (text: string) => void // 思考内容回调
+  onReasoning?: (text: string) => void, // 思考内容回调
+  signal?: AbortSignal // 终止信号
 ): Promise<void> {
   const userStore = useUserStore()
   const token = userStore.token
@@ -37,7 +38,8 @@ export async function chatStream(
       body: JSON.stringify({
         ...request,
         stream: true
-      })
+      }),
+      signal // 支持终止请求
     })
 
     if (!response.ok) {
@@ -54,6 +56,11 @@ export async function chatStream(
     let buffer = ''
 
     while (true) {
+      // 检查是否被中止
+      if (signal?.aborted) {
+        reader.cancel()
+        break
+      }
       const { done, value } = await reader.read()
       if (done) break
 
@@ -90,6 +97,125 @@ export async function chatStream(
 
     onComplete()
   } catch (error) {
+    // 如果是用户主动中止，不报错
+    if (error instanceof Error && error.name === 'AbortError') {
+      onComplete()
+      return
+    }
+    onError(error instanceof Error ? error : new Error(String(error)))
+  }
+}
+
+/**
+ * 发送 Anthropic 消息请求（流式响应）
+ * 使用 JWT + KeyID 认证调用 /v1/messages
+ */
+export async function anthropicStream(
+  request: AnthropicRequest,
+  keyId: string,
+  onChunk: (text: string) => void,
+  onError: (error: Error) => void,
+  onComplete: () => void,
+  onReasoning?: (text: string) => void, // 思考内容回调
+  signal?: AbortSignal // 终止信号
+): Promise<void> {
+  const userStore = useUserStore()
+  const token = userStore.token
+
+  if (!token) {
+    onError(new Error('未登录'))
+    return
+  }
+
+  if (!keyId) {
+    onError(new Error('请选择密钥'))
+    return
+  }
+
+  try {
+    const response = await fetch('/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-Key-ID': keyId
+      },
+      body: JSON.stringify({
+        ...request,
+        stream: true
+      }),
+      signal // 支持终止请求
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.message || errorData.error?.message || `请求失败: ${response.status}`)
+    }
+
+    if (!response.body) {
+      throw new Error('响应体为空')
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      // 检查是否被中止
+      if (signal?.aborted) {
+        reader.cancel()
+        break
+      }
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim()
+          if (data === '[DONE]' || data === '') {
+            continue
+          }
+          try {
+            const event: AnthropicStreamEvent = JSON.parse(data)
+            // 处理不同类型的事件
+            if (event.type === 'content_block_delta' && event.delta) {
+              const deltaType = event.delta.type || 'text_delta' // 默认为 text_delta，兼容无 type 字段的响应
+              // 处理思考内容
+              if (deltaType === 'thinking_delta' && event.delta.thinking && onReasoning) {
+                onReasoning(event.delta.thinking)
+              }
+              // 处理正常文本内容（兼容无 type 字段或 type 为 text_delta 的情况）
+              if ((deltaType === 'text_delta' || !event.delta.type) && event.delta.text) {
+                onChunk(event.delta.text)
+              }
+            } else if (event.type === 'message_delta') {
+              // 消息增量事件，包含停止原因
+              if (event.delta?.stop_reason) {
+                onComplete()
+                return
+              }
+            } else if (event.type === 'message_stop') {
+              onComplete()
+              return
+            }
+          } catch {
+            // 忽略解析错误
+          }
+        }
+      }
+    }
+
+    onComplete()
+  } catch (error) {
+    // 如果是用户主动中止，不报错
+    if (error instanceof Error && error.name === 'AbortError') {
+      onComplete()
+      return
+    }
     onError(error instanceof Error ? error : new Error(String(error)))
   }
 }
@@ -136,10 +262,30 @@ export async function chat(request: ChatRequest, keyId: string): Promise<ChatRes
  */
 export interface ChatSession {
   id: string
-  model: string
+  name?: string       // 会话名称（来自第一条用户消息）
+  model: string       // 模型名称
+  modelId?: string    // 模型 ID（用于恢复选择）
+  keyId?: string      // 密钥 ID（用于恢复选择）
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * 从第一条用户消息生成会话名称
+ */
+export function generateSessionName(messages: ChatMessage[], maxLength: number = 30): string {
+  const firstUserMessage = messages.find(m => m.role === 'user')
+  if (!firstUserMessage) {
+    return '新会话'
+  }
+
+  const content = firstUserMessage.content.trim()
+  if (content.length <= maxLength) {
+    return content
+  }
+
+  return content.slice(0, maxLength) + '...'
 }
 
 const SESSION_STORAGE_KEY = 'airouter_chat_sessions'

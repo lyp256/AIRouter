@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { statsApi, type DashboardStats, type UsageTrend, type ModelStats } from '@/api/stats'
+import { formatBU } from '@/utils/format'
 
 const stats = ref<DashboardStats | null>(null)
 const trends = ref<UsageTrend[]>([])
@@ -16,8 +17,8 @@ async function loadData() {
       statsApi.models(7)
     ])
     stats.value = dashRes.data
-    trends.value = trendRes.data
-    modelStats.value = modelRes.data
+    trends.value = trendRes.data || []
+    modelStats.value = modelRes.data || []
   } finally {
     loading.value = false
   }
@@ -27,10 +28,6 @@ function formatNumber(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
   return n.toString()
-}
-
-function formatCost(n: number): string {
-  return '$' + n.toFixed(4)
 }
 
 // 简单的图表数据（CSS 实现）
@@ -45,6 +42,16 @@ onMounted(loadData)
   <div class="p-6">
     <h1 class="text-2xl font-bold text-gray-800 dark:text-white mb-6">仪表盘</h1>
 
+    <!-- 加载动画 -->
+    <div v-if="loading" class="flex items-center justify-center py-16">
+      <svg class="animate-spin w-6 h-6 text-blue-500 mr-3" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+      </svg>
+      <span class="text-gray-500 dark:text-gray-400">加载中...</span>
+    </div>
+
+    <template v-else>
     <!-- 统计卡片 -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" v-if="stats">
       <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
@@ -57,7 +64,7 @@ onMounted(loadData)
       </div>
       <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
         <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">今日消费</h3>
-        <p class="text-3xl font-bold text-gray-800 dark:text-white mt-2">{{ formatCost(stats.today_cost) }}</p>
+        <p class="text-3xl font-bold text-gray-800 dark:text-white mt-2">{{ formatBU(stats.today_cost) }}</p>
       </div>
       <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
         <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">成功率</h3>
@@ -120,10 +127,11 @@ onMounted(loadData)
         <div class="space-y-2">
           <div v-for="t in trends.slice().reverse().slice(0, 5)" :key="t.date" class="flex justify-between">
             <span class="text-gray-500 dark:text-gray-400">{{ new Date(t.date).toLocaleDateString() }}</span>
-            <span class="font-medium dark:text-white">{{ formatCost(t.cost) }}</span>
+            <span class="font-medium dark:text-white">{{ formatBU(t.cost) }}</span>
           </div>
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>

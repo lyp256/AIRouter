@@ -23,21 +23,28 @@ all: build
 # ============================================
 
 .PHONY: build
-build: ## 编译后端
+build: web-build ## 编译后端（包含前端嵌入）
 	@echo ">>> 编译后端..."
 	@mkdir -p $(BIN_DIR)
 	go build $(LDFLAGS) -o $(BIN_DIR)/$(APP_NAME) $(CMD_DIR)
 	@echo ">>> 编译完成: $(BIN_DIR)/$(APP_NAME)"
 
+.PHONY: build-server
+build-server: ## 仅编译后端（不含前端，开发用）
+	@echo ">>> 编译后端（不嵌入前端）..."
+	@mkdir -p $(BIN_DIR)
+	go build $(LDFLAGS) -o $(BIN_DIR)/$(APP_NAME) $(CMD_DIR)
+	@echo ">>> 编译完成: $(BIN_DIR)/$(APP_NAME)"
+
 .PHONY: build-linux
-build-linux: ## 交叉编译 Linux amd64
+build-linux: web-build ## 交叉编译 Linux amd64（包含前端嵌入）
 	@echo ">>> 交叉编译 Linux amd64..."
 	@mkdir -p $(BIN_DIR)
 	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(APP_NAME)-linux-amd64 $(CMD_DIR)
 	@echo ">>> 编译完成: $(BIN_DIR)/$(APP_NAME)-linux-amd64"
 
 .PHONY: build-arm64
-build-arm64: ## 交叉编译 Linux arm64
+build-arm64: web-build ## 交叉编译 Linux arm64（包含前端嵌入）
 	@echo ">>> 交叉编译 Linux arm64..."
 	@mkdir -p $(BIN_DIR)
 	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(APP_NAME)-linux-arm64 $(CMD_DIR)

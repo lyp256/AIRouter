@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,8 +31,13 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 	pageSize := 20
 
 	if p := c.Query("page"); p != "" {
-		if _, err := c.GetQuery("page"); err {
-			page = 1
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+	if ps := c.Query("page_size"); ps != "" {
+		if v, err := strconv.Atoi(ps); err == nil && v > 0 && v <= 100 {
+			pageSize = v
 		}
 	}
 

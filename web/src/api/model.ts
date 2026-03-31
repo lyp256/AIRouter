@@ -1,11 +1,20 @@
 import api from './index'
-import type { Model, ModelWithUpstreams, Upstream, ApiResponse } from './types'
+import type { Model, ModelWithUpstreams, Upstream, ApiResponse, OpenAIModelsResponse, UpstreamTestResult } from './types'
 
 export const modelApi = {
-  list(): Promise<ApiResponse<Model[]>> {
+  // 获取模型列表（OpenAI 兼容格式，调用 /v1/models）
+  async list(): Promise<OpenAIModelsResponse> {
+    const resp = await fetch('/v1/models')
+    if (!resp.ok) throw new Error(`获取模型列表失败: ${resp.status}`)
+    return resp.json()
+  },
+
+  // 获取模型列表（管理 API，完整信息）
+  adminList(): Promise<ApiResponse<Model[]>> {
     return api.get('/models')
   },
 
+  // 获取模型详情（管理 API）
   get(id: string): Promise<ApiResponse<ModelWithUpstreams>> {
     return api.get(`/models/${id}`)
   },
@@ -24,6 +33,10 @@ export const modelApi = {
 
   toggle(id: string): Promise<ApiResponse<Model>> {
     return api.post(`/models/${id}/toggle`)
+  },
+
+  testUpstreams(id: string): Promise<ApiResponse<UpstreamTestResult[]>> {
+    return api.post(`/models/${id}/test-upstreams`)
   }
 }
 
@@ -55,5 +68,13 @@ export const upstreamApi = {
 
   toggle(id: string): Promise<ApiResponse<Upstream>> {
     return api.post(`/upstreams/${id}/toggle`)
+  },
+
+  resetStatus(id: string): Promise<ApiResponse<Upstream>> {
+    return api.post(`/upstreams/${id}/reset-status`)
+  },
+
+  test(id: string): Promise<ApiResponse<UpstreamTestResult>> {
+    return api.post(`/upstreams/${id}/test`)
   }
 }
