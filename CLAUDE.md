@@ -119,5 +119,4 @@ make web-build    # 构建前端生产版本
 - ChatMessage 支持 `reasoning_content` 字段（推理模型思考过程）
 - Anthropic 协议支持 `thinking` 内容块和 `thinking_delta` 增量（Claude Extended Thinking）
 - 对外 API 支持混合认证：API Key 或 JWT+KeyID（用于管理后台聊天）
-- 开发调试和本地运行前后端优先使用 MCP 调试工具（debugmcp，端口 65001）
-- 本地运行前后端优先使用 debugmcp MCP 服务以调试方式启动前端和后端，调试启动配置一般在 .vscode/launch.json 文件中保存
+- 提交代码前需要使用 `make check ` 检查，检查通过后才可以提交

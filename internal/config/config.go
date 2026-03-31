@@ -71,12 +71,16 @@ type AdminConfig struct {
 	Email    string `mapstructure:"email"`
 }
 
-// Load 加载配置
-func Load() (*Config, error) {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath("./configs")
-	viper.AddConfigPath(".")
+// Load 加载配置，configPath 为配置文件路径，为空则使用默认路径
+func Load(configPath string) (*Config, error) {
+	if configPath != "" {
+		viper.SetConfigFile(configPath)
+	} else {
+		viper.SetConfigName("config")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath("./configs")
+		viper.AddConfigPath(".")
+	}
 
 	// 设置默认值
 	viper.SetDefault("server.host", "0.0.0.0")

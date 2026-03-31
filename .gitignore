@@ -25,7 +25,7 @@ go.work.sum
 # Build output
 bin/
 *.exe
-airouter
+/airouter
 
 # Debug binaries
 __debug_bin*
