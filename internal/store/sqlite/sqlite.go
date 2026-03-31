@@ -1,8 +1,8 @@
 package sqlite
 
 import (
+	"github.com/glebarez/sqlite"
 	"github.com/lyp256/airouter/internal/model"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
