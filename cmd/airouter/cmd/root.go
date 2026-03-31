@@ -26,7 +26,16 @@ var (
 	cfgFile string
 	// 日志器
 	logger *zap.Logger
+	// 版本信息
+	version   string
+	buildTime string
 )
+
+// SetVersion 设置版本信息
+func SetVersion(v, bt string) {
+	version = v
+	buildTime = bt
+}
 
 // rootCmd 根命令
 var rootCmd = &cobra.Command{
@@ -49,7 +58,8 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "显示版本信息",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("AIRouter v1.0.0")
+		fmt.Printf("AIRouter %s\n", version)
+		fmt.Printf("构建时间: %s\n", buildTime)
 	},
 }
 
