@@ -214,6 +214,7 @@ onMounted(() => {
                 >
                   {{ log.status === 'success' ? '成功' : '失败' }}
                 </span>
+                <span v-if="log.upstream_status_code" class="text-xs text-gray-400">{{ log.upstream_status_code }}</span>
                 <span v-if="log.status === 'error' && log.error_message" class="relative cursor-help text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 group" @mouseenter="showTooltip">
                   &#9432;
                   <span class="fixed px-2 py-1 text-xs text-white bg-gray-800 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 max-w-[300px] whitespace-normal break-all" :style="tooltipStyle">{{ log.error_message }}</span>

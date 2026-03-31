@@ -133,22 +133,23 @@ func (Model) TableName() string {
 // UsageLog 使用日志模型
 // 使用 ID 关联外部数据，通过 JOIN 查询获取完整信息
 type UsageLog struct {
-	ID                string    `gorm:"primaryKey;size:36" json:"id"`
-	UserID            string    `gorm:"index;size:36" json:"user_id"`
-	UserKeyID         string    `gorm:"index;size:36" json:"user_key_id"`
-	UpstreamID        string    `gorm:"index;size:36" json:"upstream_id"`     // 关联上游模型，可获取 provider_model、model_id、provider_id
-	ProviderKeyID     string    `gorm:"index;size:36" json:"provider_key_id"` // 关联供应商密钥
-	Model             string    `gorm:"index;size:64" json:"model"`           // 对外模型名称（保留用于索引优化）
-	InputTokens       int       `gorm:"default:0" json:"input_tokens"`
-	OutputTokens      int       `gorm:"default:0" json:"output_tokens"`
-	Cost              int64     `gorm:"default:0" json:"cost"`                // 费用（纳 BU）
-	Latency           int       `gorm:"default:0" json:"latency"`             // 延迟(ms)，流式请求为TTFB
-	FirstTokenLatency int       `gorm:"default:0" json:"first_token_latency"` // 首Token延迟(ms)，仅流式请求有效
-	TotalDuration     int       `gorm:"default:0" json:"total_duration"`      // 总耗时(ms)，从请求发起到响应完成
-	Status            string    `gorm:"size:16;index" json:"status"`          // success, error
-	ErrorMessage      string    `gorm:"type:text" json:"error_message"`
-	RequestID         string    `gorm:"size:36" json:"request_id"`
-	CreatedAt         time.Time `gorm:"index" json:"created_at"`
+	ID                 string    `gorm:"primaryKey;size:36" json:"id"`
+	UserID             string    `gorm:"index;size:36" json:"user_id"`
+	UserKeyID          string    `gorm:"index;size:36" json:"user_key_id"`
+	UpstreamID         string    `gorm:"index;size:36" json:"upstream_id"`     // 关联上游模型，可获取 provider_model、model_id、provider_id
+	ProviderKeyID      string    `gorm:"index;size:36" json:"provider_key_id"` // 关联供应商密钥
+	Model              string    `gorm:"index;size:64" json:"model"`           // 对外模型名称（保留用于索引优化）
+	InputTokens        int       `gorm:"default:0" json:"input_tokens"`
+	OutputTokens       int       `gorm:"default:0" json:"output_tokens"`
+	Cost               int64     `gorm:"default:0" json:"cost"`                 // 费用（纳 BU）
+	Latency            int       `gorm:"default:0" json:"latency"`              // 延迟(ms)，流式请求为TTFB
+	FirstTokenLatency  int       `gorm:"default:0" json:"first_token_latency"`  // 首Token延迟(ms)，仅流式请求有效
+	TotalDuration      int       `gorm:"default:0" json:"total_duration"`       // 总耗时(ms)，从请求发起到响应完成
+	Status             string    `gorm:"size:16;index" json:"status"`           // success, error
+	UpstreamStatusCode int       `gorm:"default:0" json:"upstream_status_code"` // 上游模型返回的 HTTP 状态码
+	ErrorMessage       string    `gorm:"type:text" json:"error_message"`
+	RequestID          string    `gorm:"size:36" json:"request_id"`
+	CreatedAt          time.Time `gorm:"index" json:"created_at"`
 }
 
 // TableName 指定表名
