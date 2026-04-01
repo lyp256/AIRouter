@@ -37,6 +37,15 @@ const editKeyForm = ref({
   quota_limit: 0
 })
 
+// 操作 loading 状态
+const creatingProvider = ref(false)
+const savingProvider = ref(false)
+const deletingProviderId = ref<string | null>(null)
+const togglingProviderId = ref<string | null>(null)
+const creatingKey = ref(false)
+const deletingKeyId = ref<string | null>(null)
+const savingKey = ref(false)
+
 // 供应商类型配置
 const providerTypeConfigs = {
   openai: {
@@ -98,6 +107,7 @@ async function loadProviders() {
 }
 
 async function createProvider() {
+  creatingProvider.value = true
   try {
     await providerApi.create(newProvider.value)
     showCreateModal.value = false
@@ -105,6 +115,8 @@ async function createProvider() {
     loadProviders()
   } catch (e) {
     alert('创建失败')
+  } finally {
+    creatingProvider.value = false
   }
 }
 
@@ -117,6 +129,7 @@ function openEditModal(provider: Provider) {
 // 保存编辑
 async function saveEditProvider() {
   if (!editProvider.value) return
+  savingProvider.value = true
   try {
     await providerApi.update(editProvider.value.id, {
       name: editProvider.value.name,
@@ -129,6 +142,8 @@ async function saveEditProvider() {
     loadProviders()
   } catch (e) {
     alert('保存失败')
+  } finally {
+    savingProvider.value = false
   }
 }
 
@@ -145,11 +160,14 @@ function resetNewProvider() {
 
 async function deleteProvider(id: string) {
   if (!confirm('确定删除此供应商？关联的密钥和上游模型也会被删除。')) return
+  deletingProviderId.value = id
   try {
     await providerApi.delete(id)
     loadProviders()
   } catch (e) {
     alert('删除失败')
+  } finally {
+    deletingProviderId.value = null
   }
 }
 
@@ -162,6 +180,7 @@ async function showKeys(provider: Provider) {
 
 async function createKey() {
   if (!selectedProvider.value) return
+  creatingKey.value = true
   try {
     await providerApi.createKey(selectedProvider.value.id, newKey.value)
     newKey.value = { name: '', key: '' }
@@ -169,11 +188,14 @@ async function createKey() {
     providerKeys.value = res.data
   } catch (e) {
     alert('创建密钥失败')
+  } finally {
+    creatingKey.value = false
   }
 }
 
 async function deleteKey(keyId: string) {
   if (!confirm('确定删除此密钥？')) return
+  deletingKeyId.value = keyId
   try {
     await providerApi.deleteKey(keyId)
     if (selectedProvider.value) {
@@ -182,15 +204,20 @@ async function deleteKey(keyId: string) {
     }
   } catch (e: any) {
     alert(e.response?.data?.error || '删除失败')
+  } finally {
+    deletingKeyId.value = null
   }
 }
 
 async function toggleProvider(provider: Provider) {
+  togglingProviderId.value = provider.id
   try {
     await providerApi.update(provider.id, { enabled: !provider.enabled })
     loadProviders()
   } catch (e) {
     alert('操作失败')
+  } finally {
+    togglingProviderId.value = null
   }
 }
 
@@ -209,6 +236,7 @@ function openEditKeyModal(key: ProviderKey) {
 // 保存编辑密钥
 async function saveEditKey() {
   if (!editKey.value) return
+  savingKey.value = true
   try {
     const data: Partial<ProviderKey> & { key?: string } = {}
     if (editKeyForm.value.name) data.name = editKeyForm.value.name
@@ -225,6 +253,8 @@ async function saveEditKey() {
     }
   } catch (e) {
     alert('保存失败')
+  } finally {
+    savingKey.value = false
   }
 }
 
@@ -290,12 +320,28 @@ onMounted(loadProviders)
               </span>
             </td>
             <td class="px-6 py-4 text-right space-x-2">
-              <button @click="openEditModal(p)" class="text-blue-600 hover:text-blue-800 text-sm">编辑</button>
-              <button @click="toggleProvider(p)" class="text-blue-600 hover:text-blue-800 text-sm">
-                {{ p.enabled ? '禁用' : '启用' }}
+              <button
+                @click="openEditModal(p)"
+                :disabled="togglingProviderId === p.id || deletingProviderId === p.id"
+                class="text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
+              >
+                编辑
+              </button>
+              <button
+                @click="toggleProvider(p)"
+                :disabled="togglingProviderId === p.id"
+                class="text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
+              >
+                {{ togglingProviderId === p.id ? '处理中...' : (p.enabled ? '禁用' : '启用') }}
               </button>
               <button @click="showKeys(p)" class="text-green-600 hover:text-green-800 text-sm">密钥</button>
-              <button @click="deleteProvider(p.id)" class="text-red-600 hover:text-red-800 text-sm">删除</button>
+              <button
+                @click="deleteProvider(p.id)"
+                :disabled="deletingProviderId === p.id"
+                class="text-red-600 hover:text-red-800 text-sm disabled:opacity-50"
+              >
+                {{ deletingProviderId === p.id ? '删除中...' : '删除' }}
+              </button>
             </td>
           </tr>
         </tbody>
@@ -334,7 +380,9 @@ onMounted(loadProviders)
           </div>
           <div class="flex justify-end gap-2 mt-6">
             <button type="button" @click="showCreateModal = false" class="px-4 py-2 border rounded-lg dark:text-white">取消</button>
-            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">创建</button>
+            <button type="submit" :disabled="creatingProvider" class="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
+              {{ creatingProvider ? '创建中...' : '创建' }}
+            </button>
           </div>
         </form>
       </div>
@@ -371,7 +419,9 @@ onMounted(loadProviders)
           </div>
           <div class="flex justify-end gap-2 mt-6">
             <button type="button" @click="showEditModal = false; editProvider = null" class="px-4 py-2 border rounded-lg dark:text-white">取消</button>
-            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">保存</button>
+            <button type="submit" :disabled="savingProvider" class="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
+              {{ savingProvider ? '保存中...' : '保存' }}
+            </button>
           </div>
         </form>
       </div>
@@ -391,7 +441,9 @@ onMounted(loadProviders)
             <input v-model="newKey.name" placeholder="密钥名称" class="px-3 py-2 border rounded-lg dark:bg-gray-600 dark:text-white" />
             <input v-model="newKey.key" placeholder="API Key" type="password" class="px-3 py-2 border rounded-lg dark:bg-gray-600 dark:text-white" />
           </div>
-          <button @click="createKey" class="mt-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm">添加密钥</button>
+          <button @click="createKey" :disabled="creatingKey" class="mt-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm disabled:opacity-50">
+            {{ creatingKey ? '添加中...' : '添加密钥' }}
+          </button>
         </div>
 
         <!-- 密钥列表 -->
@@ -423,8 +475,20 @@ onMounted(loadProviders)
                 {{ k.last_used_at ? new Date(k.last_used_at).toLocaleString() : '-' }}
               </td>
               <td class="px-4 py-2 text-right">
-                <button @click="openEditKeyModal(k)" class="text-blue-600 hover:text-blue-800 text-sm mr-2">编辑</button>
-                <button @click="deleteKey(k.id)" class="text-red-600 hover:text-red-800 text-sm">删除</button>
+                <button
+                  @click="openEditKeyModal(k)"
+                  :disabled="deletingKeyId === k.id"
+                  class="text-blue-600 hover:text-blue-800 text-sm mr-2 disabled:opacity-50"
+                >
+                  编辑
+                </button>
+                <button
+                  @click="deleteKey(k.id)"
+                  :disabled="deletingKeyId === k.id"
+                  class="text-red-600 hover:text-red-800 text-sm disabled:opacity-50"
+                >
+                  {{ deletingKeyId === k.id ? '删除中...' : '删除' }}
+                </button>
               </td>
             </tr>
           </tbody>
@@ -462,7 +526,9 @@ onMounted(loadProviders)
           </div>
           <div class="flex justify-end gap-2 mt-6">
             <button type="button" @click="showEditKeyModal = false; editKey = null" class="px-4 py-2 border rounded-lg dark:text-white">取消</button>
-            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">保存</button>
+            <button type="submit" :disabled="savingKey" class="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
+              {{ savingKey ? '保存中...' : '保存' }}
+            </button>
           </div>
         </form>
       </div>

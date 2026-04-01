@@ -28,6 +28,14 @@ const newKey = ref({
   quota_limit: 0
 })
 
+// 操作 loading 状态
+const creatingUser = ref(false)
+const deletingUserId = ref<string | null>(null)
+const togglingUserId = ref<string | null>(null)
+const creatingKey = ref(false)
+const deletingKeyId = ref<string | null>(null)
+const togglingKeyId = ref<string | null>(null)
+
 async function loadUsers() {
   loading.value = true
   try {
@@ -45,6 +53,7 @@ function goToPage(page: number) {
 }
 
 async function createUser() {
+  creatingUser.value = true
   try {
     await userApi.create(newUser.value)
     showModal.value = false
@@ -52,26 +61,34 @@ async function createUser() {
     loadUsers()
   } catch (e) {
     alert('创建失败')
+  } finally {
+    creatingUser.value = false
   }
 }
 
 async function deleteUser(id: string) {
   if (!confirm('确定删除此用户？')) return
+  deletingUserId.value = id
   try {
     await userApi.delete(id)
     loadUsers()
   } catch (e) {
     alert('删除失败')
+  } finally {
+    deletingUserId.value = null
   }
 }
 
 async function toggleStatus(user: User) {
   const newStatus = user.status === 'active' ? 'disabled' : 'active'
+  togglingUserId.value = user.id
   try {
     await userApi.update(user.id, { status: newStatus })
     loadUsers()
   } catch (e) {
     alert('操作失败')
+  } finally {
+    togglingUserId.value = null
   }
 }
 
@@ -85,6 +102,7 @@ async function showKeys(user: User) {
 
 async function createKey() {
   if (!selectedUser.value) return
+  creatingKey.value = true
   try {
     newKey.value.user_id = selectedUser.value.id
     const res = await userApi.createKey(newKey.value)
@@ -94,11 +112,14 @@ async function createKey() {
     userKeys.value = userRes.keys
   } catch (e) {
     alert('创建密钥失败')
+  } finally {
+    creatingKey.value = false
   }
 }
 
 async function deleteKey(keyId: string) {
   if (!confirm('确定删除此密钥？')) return
+  deletingKeyId.value = keyId
   try {
     await userApi.deleteKey(keyId)
     if (selectedUser.value) {
@@ -107,11 +128,14 @@ async function deleteKey(keyId: string) {
     }
   } catch (e) {
     alert('删除失败')
+  } finally {
+    deletingKeyId.value = null
   }
 }
 
 async function toggleKeyStatus(key: UserKey) {
   const newStatus = key.status === 'active' ? 'disabled' : 'active'
+  togglingKeyId.value = key.id
   try {
     await userApi.updateKey(key.id, { status: newStatus })
     if (selectedUser.value) {
@@ -120,6 +144,8 @@ async function toggleKeyStatus(key: UserKey) {
     }
   } catch (e) {
     alert('操作失败')
+  } finally {
+    togglingKeyId.value = null
   }
 }
 
@@ -190,11 +216,27 @@ onMounted(loadUsers)
             </td>
             <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">{{ new Date(u.created_at).toLocaleDateString() }}</td>
             <td class="px-6 py-4 text-right space-x-2">
-              <button @click="toggleStatus(u)" class="text-blue-600 hover:text-blue-800 text-sm">
-                {{ u.status === 'active' ? '禁用' : '启用' }}
+              <button
+                @click="toggleStatus(u)"
+                :disabled="togglingUserId === u.id"
+                class="text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
+              >
+                {{ togglingUserId === u.id ? '处理中...' : (u.status === 'active' ? '禁用' : '启用') }}
               </button>
-              <button @click="showKeys(u)" class="text-green-600 hover:text-green-800 text-sm">密钥</button>
-              <button @click="deleteUser(u.id)" class="text-red-600 hover:text-red-800 text-sm">删除</button>
+              <button
+                @click="showKeys(u)"
+                :disabled="deletingUserId === u.id"
+                class="text-green-600 hover:text-green-800 text-sm disabled:opacity-50"
+              >
+                密钥
+              </button>
+              <button
+                @click="deleteUser(u.id)"
+                :disabled="deletingUserId === u.id"
+                class="text-red-600 hover:text-red-800 text-sm disabled:opacity-50"
+              >
+                {{ deletingUserId === u.id ? '删除中...' : '删除' }}
+              </button>
             </td>
           </tr>
         </tbody>
@@ -237,7 +279,9 @@ onMounted(loadUsers)
           </div>
           <div class="flex justify-end gap-2 mt-6">
             <button type="button" @click="showModal = false" class="px-4 py-2 border rounded-lg dark:text-white">取消</button>
-            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">创建</button>
+            <button type="submit" :disabled="creatingUser" class="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
+              {{ creatingUser ? '创建中...' : '创建' }}
+            </button>
           </div>
         </form>
       </div>
@@ -267,7 +311,9 @@ onMounted(loadUsers)
             <input v-model.number="newKey.rate_limit" type="number" placeholder="请求限制/分钟" class="px-3 py-2 border rounded-lg dark:bg-gray-600 dark:text-white" />
             <input v-model.number="newKey.quota_limit" type="number" placeholder="配额限制" class="px-3 py-2 border rounded-lg dark:bg-gray-600 dark:text-white" />
           </div>
-          <button @click="createKey" class="mt-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm">创建密钥</button>
+          <button @click="createKey" :disabled="creatingKey" class="mt-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm disabled:opacity-50">
+            {{ creatingKey ? '创建中...' : '创建密钥' }}
+          </button>
         </div>
 
         <!-- 密钥列表 -->
@@ -290,8 +336,20 @@ onMounted(loadUsers)
                 <span :class="k.status === 'active' ? 'text-green-600' : 'text-red-600'" class="text-sm">{{ k.status === 'active' ? '正常' : '禁用' }}</span>
               </td>
               <td class="px-4 py-2 text-right space-x-2">
-                <button @click="toggleKeyStatus(k)" class="text-blue-600 text-sm">{{ k.status === 'active' ? '禁用' : '启用' }}</button>
-                <button @click="deleteKey(k.id)" class="text-red-600 text-sm">删除</button>
+                <button
+                  @click="toggleKeyStatus(k)"
+                  :disabled="togglingKeyId === k.id"
+                  class="text-blue-600 text-sm disabled:opacity-50"
+                >
+                  {{ togglingKeyId === k.id ? '处理中...' : (k.status === 'active' ? '禁用' : '启用') }}
+                </button>
+                <button
+                  @click="deleteKey(k.id)"
+                  :disabled="deletingKeyId === k.id"
+                  class="text-red-600 text-sm disabled:opacity-50"
+                >
+                  {{ deletingKeyId === k.id ? '删除中...' : '删除' }}
+                </button>
               </td>
             </tr>
           </tbody>
