@@ -177,11 +177,20 @@ func (h *ProviderHandler) DeleteProvider(c *gin.Context) {
 		return
 	}
 
-	// 删除关联的密钥
-	tx.Delete(&model.ProviderKey{}, "provider_id = ?", id)
+	// 获取要删除的密钥 ID 列表
+	var keyIDs []string
+	tx.Model(&model.ProviderKey{}).Where("provider_id = ?", id).Pluck("id", &keyIDs)
 
 	// 删除关联的上游模型
 	tx.Delete(&model.Upstream{}, "provider_id = ?", id)
+
+	// 将使用日志中的 provider_key_id 设为空（保留日志用于统计）
+	if len(keyIDs) > 0 {
+		tx.Model(&model.UsageLog{}).Where("provider_key_id IN ?", keyIDs).Update("provider_key_id", "")
+	}
+
+	// 删除关联的密钥
+	tx.Delete(&model.ProviderKey{}, "provider_id = ?", id)
 
 	tx.Commit()
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})

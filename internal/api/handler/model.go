@@ -442,6 +442,9 @@ func (h *ModelHandler) CreateUpstream(c *gin.Context) {
 		return
 	}
 
+	// 清除选择器缓存，确保下次请求能选到新添加的上游模型
+	h.upstreamSelector.InvalidateCache(modelID)
+
 	c.JSON(http.StatusCreated, gin.H{"data": u})
 }
 
@@ -505,6 +508,9 @@ func (h *ModelHandler) UpdateUpstream(c *gin.Context) {
 		return
 	}
 
+	// 清除选择器缓存
+	h.upstreamSelector.InvalidateCache(u.ModelID)
+
 	h.db.First(&u, "id = ?", id)
 	c.JSON(http.StatusOK, gin.H{"data": u})
 }
@@ -512,6 +518,14 @@ func (h *ModelHandler) UpdateUpstream(c *gin.Context) {
 // DeleteUpstream 删除上游模型
 func (h *ModelHandler) DeleteUpstream(c *gin.Context) {
 	id := c.Param("id")
+
+	var u model.Upstream
+	if err := h.db.First(&u, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "上游模型不存在"})
+		return
+	}
+
+	modelID := u.ModelID
 
 	result := h.db.Delete(&model.Upstream{}, "id = ?", id)
 	if result.Error != nil {
@@ -523,6 +537,9 @@ func (h *ModelHandler) DeleteUpstream(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "上游模型不存在"})
 		return
 	}
+
+	// 清除选择器缓存
+	h.upstreamSelector.InvalidateCache(modelID)
 
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
@@ -544,6 +561,9 @@ func (h *ModelHandler) ToggleUpstream(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
 		return
 	}
+
+	// 清除选择器缓存
+	h.upstreamSelector.InvalidateCache(u.ModelID)
 
 	c.JSON(http.StatusOK, gin.H{"data": u})
 }

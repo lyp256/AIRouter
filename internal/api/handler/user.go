@@ -191,20 +191,34 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 func (h *UserHandler) DeleteUser(c *gin.Context) {
 	id := c.Param("id")
 
-	result := h.db.Delete(&model.User{}, "id = ?", id)
+	// 开启事务
+	tx := h.db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	result := tx.Delete(&model.User{}, "id = ?", id)
 	if result.Error != nil {
+		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
 		return
 	}
 
 	if result.RowsAffected == 0 {
+		tx.Rollback()
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}
 
 	// 删除用户密钥
-	h.db.Delete(&model.UserKey{}, "user_id = ?", id)
+	tx.Delete(&model.UserKey{}, "user_id = ?", id)
 
+	// 删除用户的使用日志（将 user_id 设为空，保留日志用于统计）
+	tx.Model(&model.UsageLog{}).Where("user_id = ?", id).Update("user_id", "")
+
+	tx.Commit()
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
