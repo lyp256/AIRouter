@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,11 +22,137 @@ type APIKeyAuthConfig struct {
 	JWTConfig JWTConfig // 用于 JWT+KeyID 认证
 }
 
+// apiKeyCache API Key 缓存条目
+type apiKeyCache struct {
+	keyID      string
+	userID     string
+	keyHash    string // 原始 key 的 hash
+	decrypted  string // 解密后的 key
+	quotaUsed  int64
+	quotaLimit int64
+	expiredAt  *time.Time
+	status     string
+}
+
+// APIKeyAuthenticator API Key 认证器（带缓存）
+type APIKeyAuthenticator struct {
+	db        *gorm.DB
+	encryptor *crypto.Encryptor
+	mu        sync.RWMutex
+	cache     map[string]*apiKeyCache // keyID -> cache entry
+	keyIndex  map[string]string       // keyHash -> keyID (用于快速查找)
+	lastLoad  time.Time
+}
+
+// NewAPIKeyAuthenticator 创建 API Key 认证器
+func NewAPIKeyAuthenticator(db *gorm.DB, encryptor *crypto.Encryptor) *APIKeyAuthenticator {
+	return &APIKeyAuthenticator{
+		db:        db,
+		encryptor: encryptor,
+		cache:     make(map[string]*apiKeyCache),
+		keyIndex:  make(map[string]string),
+	}
+}
+
+// RefreshCache 刷新缓存
+func (a *APIKeyAuthenticator) RefreshCache() error {
+	var userKeys []model.UserKey
+	if err := a.db.Where("status = ?", "active").Find(&userKeys).Error; err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 重建缓存
+	newCache := make(map[string]*apiKeyCache)
+	newKeyIndex := make(map[string]string)
+
+	for i := range userKeys {
+		decryptedKey, err := a.encryptor.Decrypt(userKeys[i].Key)
+		if err != nil {
+			continue
+		}
+
+		keyHash := sha256Hash(decryptedKey)
+		newCache[userKeys[i].ID] = &apiKeyCache{
+			keyID:      userKeys[i].ID,
+			userID:     userKeys[i].UserID,
+			keyHash:    keyHash,
+			decrypted:  decryptedKey,
+			quotaUsed:  userKeys[i].QuotaUsed,
+			quotaLimit: userKeys[i].QuotaLimit,
+			expiredAt:  userKeys[i].ExpiredAt,
+			status:     userKeys[i].Status,
+		}
+		newKeyIndex[keyHash] = userKeys[i].ID
+	}
+
+	a.cache = newCache
+	a.keyIndex = newKeyIndex
+	a.lastLoad = time.Now()
+	return nil
+}
+
+// Authenticate 通过 API Key 认证
+func (a *APIKeyAuthenticator) Authenticate(apiKey string) (*model.UserKey, error) {
+	// 如果缓存为空或过期（5分钟），刷新缓存
+	a.mu.RLock()
+	cacheEmpty := len(a.cache) == 0
+	cacheStale := time.Since(a.lastLoad) > 5*time.Minute
+	a.mu.RUnlock()
+
+	if cacheEmpty || cacheStale {
+		if err := a.RefreshCache(); err != nil {
+			return nil, err
+		}
+	}
+
+	// 计算 API Key 的 hash
+	keyHash := sha256Hash(apiKey)
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	// 通过 hash 快速查找
+	keyID, exists := a.keyIndex[keyHash]
+	if !exists {
+		return nil, nil // 未找到
+	}
+
+	entry, exists := a.cache[keyID]
+	if !exists {
+		return nil, nil
+	}
+
+	// 验证原始 key 是否匹配（双重验证）
+	if entry.decrypted != apiKey {
+		return nil, nil
+	}
+
+	// 从数据库获取最新的配额信息
+	var userKey model.UserKey
+	if err := a.db.First(&userKey, "id = ?", keyID).Error; err != nil {
+		return nil, err
+	}
+
+	return &userKey, nil
+}
+
+// sha256Hash 计算 SHA256 hash
+func sha256Hash(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
 // APIKeyAuth API Key 认证中间件
 // 支持两种认证方式：
 // 1. API Key 认证: Authorization: Bearer <api_key>
 // 2. JWT + KeyID 认证: Authorization: Bearer <jwt_token>, X-Key-ID: <key_id>
 func APIKeyAuth(cfg APIKeyAuthConfig) gin.HandlerFunc {
+	// 创建认证器
+	authenticator := NewAPIKeyAuthenticator(cfg.DB, cfg.Encryptor)
+
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -49,8 +178,31 @@ func APIKeyAuth(cfg APIKeyAuthConfig) gin.HandlerFunc {
 			return
 		}
 
-		// 否则使用传统 API Key 认证
-		handleAPIKeyAuth(c, cfg, token)
+		// 使用带缓存的认证器进行 API Key 认证
+		userKey, err := authenticator.Authenticate(token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "认证服务错误"})
+			c.Abort()
+			return
+		}
+
+		if userKey == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的 API Key"})
+			c.Abort()
+			return
+		}
+
+		// 验证密钥状态、过期、配额
+		if !validateUserKey(c, userKey) {
+			return
+		}
+
+		// 设置上下文
+		c.Set("user_id", userKey.UserID)
+		c.Set("user_key_id", userKey.ID)
+		c.Set("user_key", userKey)
+
+		c.Next()
 	}
 }
 
@@ -94,49 +246,6 @@ func handleJWTKeyIDAuth(c *gin.Context, cfg APIKeyAuthConfig, tokenString, keyID
 	c.Set("user_key", &userKey)
 	c.Set("username", claims.Username)
 	c.Set("role", claims.Role)
-
-	c.Next()
-}
-
-// handleAPIKeyAuth 处理传统 API Key 认证
-func handleAPIKeyAuth(c *gin.Context, cfg APIKeyAuthConfig, apiKey string) {
-	// 查询所有活跃的用户密钥
-	var userKeys []model.UserKey
-	result := cfg.DB.Where("status = ?", "active").Find(&userKeys)
-	if result.Error != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的 API Key"})
-		c.Abort()
-		return
-	}
-
-	// 遍历密钥进行匹配
-	var matchedKey *model.UserKey
-	for i := range userKeys {
-		decryptedKey, err := cfg.Encryptor.Decrypt(userKeys[i].Key)
-		if err != nil {
-			continue // 解密失败，跳过
-		}
-		if decryptedKey == apiKey {
-			matchedKey = &userKeys[i]
-			break
-		}
-	}
-
-	if matchedKey == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的 API Key"})
-		c.Abort()
-		return
-	}
-
-	// 验证密钥状态、过期、配额
-	if !validateUserKey(c, matchedKey) {
-		return
-	}
-
-	// 设置上下文
-	c.Set("user_id", matchedKey.UserID)
-	c.Set("user_key_id", matchedKey.ID)
-	c.Set("user_key", matchedKey)
 
 	c.Next()
 }

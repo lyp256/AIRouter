@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lyp256/airouter/internal/api/middleware"
+	"github.com/lyp256/airouter/internal/config"
 	"github.com/lyp256/airouter/internal/model"
 	"github.com/lyp256/airouter/internal/provider"
 	"github.com/lyp256/airouter/internal/service"
@@ -25,14 +27,22 @@ type ProxyHandler struct {
 	db               *gorm.DB
 	logger           *zap.Logger
 	upstreamSelector *service.UpstreamSelector
+	retryService     *service.RetryService
+	retryConfig      *config.RetryConfig
 }
 
 // NewProxyHandler 创建代理处理器
-func NewProxyHandler(db *gorm.DB, logger *zap.Logger, upstreamSelector *service.UpstreamSelector) *ProxyHandler {
+func NewProxyHandler(db *gorm.DB, logger *zap.Logger, upstreamSelector *service.UpstreamSelector, retryConfig *config.RetryConfig) *ProxyHandler {
+	var retryService *service.RetryService
+	if retryConfig != nil && retryConfig.Enabled {
+		retryService = service.NewRetryService(retryConfig, nil)
+	}
 	return &ProxyHandler{
 		db:               db,
 		logger:           logger,
 		upstreamSelector: upstreamSelector,
+		retryService:     retryService,
+		retryConfig:      retryConfig,
 	}
 }
 
@@ -62,38 +72,43 @@ func (h *ProxyHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
-	// 选择上游模型
-	selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
+	// 校验用户密钥权限
+	if !h.checkModelPermission(c, req.Model) {
+		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
-				"message": "没有可用的上游模型",
-				"type":    "internal_error",
+				"message": "无权访问模型: " + req.Model,
+				"type":    "permission_denied",
 			},
 		})
 		return
 	}
 
-	// 创建客户端
-	client := provider.NewClient(provider.ClientConfig{
-		BaseURL: selection.Provider.BaseURL,
-		APIKey:  selection.DecryptedKey,
-	})
-
-	// 准备请求
-	reqBody := h.prepareRequestBody(&req, selection.Upstream)
-
 	startTime := time.Now()
 	requestID := middleware.GetRequestID(c)
 
-	// 处理流式请求
+	// 处理流式请求（流式请求不支持重试）
 	if req.Stream {
+		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": gin.H{
+					"message": "没有可用的上游模型",
+					"type":    "internal_error",
+				},
+			})
+			return
+		}
+		client := provider.NewClient(provider.ClientConfig{
+			BaseURL: selection.Provider.BaseURL,
+			APIKey:  selection.DecryptedKey,
+		})
+		reqBody := h.prepareRequestBody(&req, selection.Upstream)
 		h.handleStreamChat(c, client, reqBody, selection, modelCfg, startTime, requestID)
 		return
 	}
 
-	// 非流式请求
-	h.handleNormalChat(c, client, reqBody, selection, modelCfg, startTime, requestID)
+	// 非流式请求 - 支持重试
+	h.handleNormalChatWithRetry(c, &req, &modelCfg, startTime, requestID)
 }
 
 // prepareRequestBody 准备请求体
@@ -149,79 +164,153 @@ func (h *ProxyHandler) prepareRequestBody(req *openai.ChatCompletionRequest, ups
 	return reqBody
 }
 
-// handleNormalChat 处理非流式请求
-func (h *ProxyHandler) handleNormalChat(c *gin.Context, client *provider.Client, reqBody map[string]interface{},
-	selection *service.UpstreamSelection, modelCfg model.Model, startTime time.Time, requestID string) {
-
-	// 获取 API 路径，如果供应商配置了则使用，否则使用默认路径
-	apiPath := selection.Provider.APIPath
-	if apiPath == "" {
-		apiPath = "/v1/chat/completions"
+// handleNormalChatWithRetry 处理非流式请求（支持重试和故障转移）
+func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.ChatCompletionRequest, modelCfg *model.Model, startTime time.Time, requestID string) {
+	maxRetries := 3
+	if h.retryConfig != nil && h.retryConfig.Enabled {
+		maxRetries = h.retryConfig.MaxAttempts
 	}
 
-	resp, err := client.Do(c.Request.Context(), provider.Request{
-		Method: "POST",
-		Path:   apiPath,
-		Body:   reqBody,
-	})
-	latency := time.Since(startTime).Milliseconds()
+	excludeUpstreams := make(map[string]bool)
+	var lastErr error
+	var lastStatusCode int
+	var lastErrMsg string
 
-	if err != nil {
-		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": gin.H{
-				"message": "请求上游服务失败: " + err.Error(),
-				"type":    "upstream_error",
-			},
-		})
-		return
-	}
-
-	// 检查上游错误响应
-	if resp.StatusCode >= 400 {
-		h.logger.Error("上游返回错误",
-			zap.Int("status", resp.StatusCode),
-			zap.String("body", string(resp.Body)),
-			zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		// 尝试解析上游错误响应
-		var upstreamErr openai.ErrorResponse
-		errMsg := string(resp.Body)
-		if err := json.Unmarshal(resp.Body, &upstreamErr); err == nil && upstreamErr.Message != "" {
-			errMsg = upstreamErr.Message
-			c.JSON(resp.StatusCode, gin.H{
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 选择上游模型（排除已失败的上游）
+		selection, err := h.upstreamSelector.SelectUpstreamWithExclusion(modelCfg.ID, excludeUpstreams)
+		if err != nil {
+			if lastErr != nil {
+				// 所有上游都已尝试过，返回最后的错误
+				break
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": gin.H{
-					"message": upstreamErr.Message,
-					"type":    upstreamErr.Type,
-					"code":    upstreamErr.Code,
+					"message": "没有可用的上游模型",
+					"type":    "internal_error",
 				},
 			})
-		} else {
-			// 无法解析，原样返回
-			c.Data(resp.StatusCode, "application/json", resp.Body)
+			return
 		}
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
+
+		// 创建客户端
+		client := provider.NewClient(provider.ClientConfig{
+			BaseURL: selection.Provider.BaseURL,
+			APIKey:  selection.DecryptedKey,
+		})
+
+		// 准备请求
+		reqBody := h.prepareRequestBody(req, selection.Upstream)
+		reqBody["stream"] = false
+
+		// 获取 API 路径
+		apiPath := selection.Provider.APIPath
+		if apiPath == "" {
+			apiPath = "/v1/chat/completions"
+		}
+
+		resp, err := client.Do(c.Request.Context(), provider.Request{
+			Method: "POST",
+			Path:   apiPath,
+			Body:   reqBody,
+		})
+		latency := time.Since(startTime).Milliseconds()
+
+		if err != nil {
+			h.logger.Warn("请求上游失败，准备重试",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+				zap.String("upstream_id", selection.Upstream.ID),
+				zap.Int("attempt", attempt))
+			_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+			_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
+			excludeUpstreams[selection.Upstream.ID] = true
+			lastErr = err
+			lastErrMsg = err.Error()
+			continue
+		}
+
+		// 检查上游错误响应
+		if resp.StatusCode >= 400 {
+			// 判断是否应该重试（5xx 错误或 429 限流）
+			shouldRetry := resp.StatusCode >= 500 || resp.StatusCode == 429
+			if shouldRetry && attempt < maxRetries {
+				h.logger.Warn("上游返回错误，准备重试",
+					zap.Int("status", resp.StatusCode),
+					zap.String("request_id", requestID),
+					zap.String("upstream_id", selection.Upstream.ID),
+					zap.Int("attempt", attempt))
+				_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+				excludeUpstreams[selection.Upstream.ID] = true
+				lastStatusCode = resp.StatusCode
+				lastErrMsg = string(resp.Body)
+				continue
+			}
+
+			// 不可重试的错误或已达到最大重试次数
+			h.logger.Error("上游返回错误",
+				zap.Int("status", resp.StatusCode),
+				zap.String("body", string(resp.Body)),
+				zap.String("request_id", requestID))
+			_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+
+			var upstreamErr openai.ErrorResponse
+			errMsg := string(resp.Body)
+			if jsonErr := json.Unmarshal(resp.Body, &upstreamErr); jsonErr == nil && upstreamErr.Message != "" {
+				errMsg = upstreamErr.Message
+				c.JSON(resp.StatusCode, gin.H{
+					"error": gin.H{
+						"message": upstreamErr.Message,
+						"type":    upstreamErr.Type,
+						"code":    upstreamErr.Code,
+					},
+				})
+			} else {
+				c.Data(resp.StatusCode, "application/json", resp.Body)
+			}
+			h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
+			return
+		}
+
+		// 成功
+		_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
+		_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
+
+		var usage openai.Usage
+		var chatResp openai.ChatCompletionResponse
+		if jsonErr := json.Unmarshal(resp.Body, &chatResp); jsonErr == nil && chatResp.Usage != nil {
+			usage = *chatResp.Usage
+		}
+
+		h.logUsage(c, selection, modelCfg, &usage, latency, 0, latency, "success", 200, "")
+		c.Data(resp.StatusCode, "application/json", resp.Body)
 		return
 	}
 
-	// 记录成功
-	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
+	// 所有重试都失败
+	latency := time.Since(startTime).Milliseconds()
+	h.logger.Error("所有上游重试失败",
+		zap.String("request_id", requestID),
+		zap.Int("attempts", maxRetries),
+		zap.String("last_error", lastErrMsg))
 
-	// 解析响应计算 token
-	var chatResp openai.ChatCompletionResponse
-	if err := json.Unmarshal(resp.Body, &chatResp); err == nil && chatResp.Usage != nil {
-		// 记录使用日志
-		h.logUsage(c, selection, &modelCfg, chatResp.Usage, latency, 0, latency, "success", 200, "")
+	// 记录失败日志
+	h.logUsage(c, nil, modelCfg, &openai.Usage{}, latency, 0, latency, "error", lastStatusCode, lastErrMsg)
+
+	errMsg := "请求上游服务失败"
+	if lastErrMsg != "" {
+		errMsg = lastErrMsg
 	}
-
-	// 返回响应
-	c.Data(resp.StatusCode, "application/json", resp.Body)
+	statusCode := http.StatusBadGateway
+	if lastStatusCode > 0 {
+		statusCode = lastStatusCode
+	}
+	c.JSON(statusCode, gin.H{
+		"error": gin.H{
+			"message": errMsg,
+			"type":    "upstream_error",
+		},
+	})
 }
 
 // handleStreamChat 处理流式请求
@@ -440,6 +529,17 @@ func (h *ProxyHandler) Completions(c *gin.Context) {
 		return
 	}
 
+	// 校验用户密钥权限
+	if !h.checkModelPermission(c, req.Model) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": "无权访问模型: " + req.Model,
+				"type":    "permission_denied",
+			},
+		})
+		return
+	}
+
 	// 选择上游模型
 	selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
 	if err != nil {
@@ -595,11 +695,14 @@ func (h *ProxyHandler) handleNormalCompletion(c *gin.Context, client *provider.C
 	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
 	// 解析响应计算 token
+	var usage openai.Usage
 	var compResp openai.CompletionResponse
 	if err := json.Unmarshal(resp.Body, &compResp); err == nil && compResp.Usage != nil {
-		// 记录使用日志
-		h.logUsage(c, selection, &modelCfg, compResp.Usage, latency, 0, latency, "success", 200, "")
+		usage = *compResp.Usage
 	}
+
+	// 记录使用日志（无论是否有 usage 都记录）
+	h.logUsage(c, selection, &modelCfg, &usage, latency, 0, latency, "success", 200, "")
 
 	// 返回响应
 	c.Data(resp.StatusCode, "application/json", resp.Body)
@@ -790,6 +893,17 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 		return
 	}
 
+	// 校验用户密钥权限
+	if !h.checkModelPermission(c, req.Model) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": "无权访问模型: " + req.Model,
+				"type":    "permission_denied",
+			},
+		})
+		return
+	}
+
 	// 选择上游模型
 	selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
 	if err != nil {
@@ -880,11 +994,13 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
-	// 记录使用日志
+	// 记录使用日志（无论是否有 usage 都记录）
+	var usage openai.Usage
 	var embResp openai.EmbeddingResponse
 	if err := json.Unmarshal(resp.Body, &embResp); err == nil && embResp.Usage != nil {
-		h.logUsage(c, selection, &modelCfg, embResp.Usage, latency, 0, latency, "success", 200, "")
+		usage = *embResp.Usage
 	}
+	h.logUsage(c, selection, &modelCfg, &usage, latency, 0, latency, "success", 200, "")
 
 	c.Data(resp.StatusCode, "application/json", resp.Body)
 }
@@ -927,8 +1043,90 @@ func (h *ProxyHandler) logUsage(c *gin.Context, selection *service.UpstreamSelec
 	h.db.Create(&log)
 }
 
+// checkModelPermission 检查用户是否有权限访问指定模型
+func (h *ProxyHandler) checkModelPermission(c *gin.Context, modelName string) bool {
+	userKey := middleware.GetUserKey(c)
+	if userKey == nil {
+		// 没有用户密钥信息（可能是 JWT 认证的管理员），允许访问
+		return true
+	}
+
+	// 如果权限字段为空，允许访问所有模型
+	if userKey.Permissions == "" {
+		return true
+	}
+
+	// 解析权限配置
+	// 格式：models:* 或 models:gpt-4,models:claude-3
+	permissions := parsePermissions(userKey.Permissions)
+
+	// 检查是否有通配符权限
+	if permissions["models"] == "*" {
+		return true
+	}
+
+	// 检查是否在允许列表中
+	if allowedModels, ok := permissions["models_list"].([]string); ok {
+		for _, m := range allowedModels {
+			if m == modelName {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// parsePermissions 解析权限配置字符串
+func parsePermissions(permissions string) map[string]interface{} {
+	result := make(map[string]interface{})
+	if permissions == "" {
+		return result
+	}
+
+	// 格式：models:* 或 models:gpt-4,claude-3
+	// 或 JSON 格式：{"models": ["gpt-4", "claude-3"]}
+
+	// 尝试解析 JSON 格式
+	if permissions[0] == '{' {
+		var jsonPerms map[string]interface{}
+		if err := json.Unmarshal([]byte(permissions), &jsonPerms); err == nil {
+			// 处理 JSON 中的 models 数组
+			if models, ok := jsonPerms["models"].([]interface{}); ok {
+				modelList := make([]string, 0, len(models))
+				for _, m := range models {
+					if ms, ok := m.(string); ok {
+						modelList = append(modelList, ms)
+					}
+				}
+				result["models_list"] = modelList
+			}
+			return result
+		}
+	}
+
+	// 解析简单格式 models:* 或 models:gpt-4,claude-3
+	parts := strings.Split(permissions, ":")
+	if len(parts) == 2 && parts[0] == "models" {
+		if parts[1] == "*" {
+			result["models"] = "*"
+		} else {
+			modelList := strings.Split(parts[1], ",")
+			result["models_list"] = modelList
+		}
+	}
+
+	return result
+}
+
 func requestID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	// 使用 UUID 替代时间戳，避免高并发下重复
+	return fmt.Sprintf("%d%06d", time.Now().UnixNano(), randomInt(100000, 999999))
+}
+
+// randomInt 生成指定范围内的随机整数
+func randomInt(min, max int) int {
+	return min + rand.Intn(max-min+1)
 }
 
 // AnthropicMessages Anthropic Messages API
@@ -949,6 +1147,15 @@ func (h *ProxyHandler) AnthropicMessages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"type":    "invalid_request_error",
 			"message": "模型不存在或未启用: " + req.Model,
+		})
+		return
+	}
+
+	// 校验用户密钥权限
+	if !h.checkModelPermission(c, req.Model) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"type":    "permission_denied",
+			"message": "无权访问模型: " + req.Model,
 		})
 		return
 	}
@@ -1015,14 +1222,16 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
-	// 记录使用日志
+	// 记录使用日志（无论是否有 usage 都记录）
+	var usage openai.Usage
 	if resp.Usage != nil {
-		h.logUsage(c, selection, modelCfg, &openai.Usage{
+		usage = openai.Usage{
 			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		}, latency, 0, latency, "success", 200, "")
+		}
 	}
+	h.logUsage(c, selection, modelCfg, &usage, latency, 0, latency, "success", 200, "")
 
 	c.JSON(http.StatusOK, resp)
 }

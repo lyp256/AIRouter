@@ -28,12 +28,19 @@ type UpstreamSelection struct {
 	DecryptedKey string
 }
 
+// upstreamCacheEntry 缓存条目
+type upstreamCacheEntry struct {
+	upstreams []*model.Upstream
+	expiredAt time.Time
+}
+
 // UpstreamSelector 上游模型选择器
 type UpstreamSelector struct {
 	db        *gorm.DB
 	encryptor *crypto.Encryptor
 	mu        sync.RWMutex
-	cache     map[string][]*model.Upstream // modelID -> upstreams
+	cache     map[string]*upstreamCacheEntry // modelID -> cache entry
+	cacheTTL  time.Duration                  // 缓存过期时间
 }
 
 // NewUpstreamSelector 创建上游模型选择器
@@ -41,32 +48,46 @@ func NewUpstreamSelector(db *gorm.DB, encryptor *crypto.Encryptor) *UpstreamSele
 	return &UpstreamSelector{
 		db:        db,
 		encryptor: encryptor,
-		cache:     make(map[string][]*model.Upstream),
+		cache:     make(map[string]*upstreamCacheEntry),
+		cacheTTL:  5 * time.Minute, // 默认缓存 5 分钟
 	}
+}
+
+// SetCacheTTL 设置缓存过期时间
+func (s *UpstreamSelector) SetCacheTTL(ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cacheTTL = ttl
 }
 
 // SelectUpstream 选择一个上游模型
 func (s *UpstreamSelector) SelectUpstream(modelID string) (*UpstreamSelection, error) {
-	s.mu.RLock()
-	upstreams, ok := s.cache[modelID]
-	s.mu.RUnlock()
+	return s.SelectUpstreamWithExclusion(modelID, nil)
+}
 
-	if !ok || len(upstreams) == 0 {
-		// 从数据库加载
-		if err := s.loadUpstreams(modelID); err != nil {
-			return nil, err
-		}
-		s.mu.RLock()
-		upstreams = s.cache[modelID]
-		s.mu.RUnlock()
-	}
+// SelectUpstreamWithExclusion 选择一个上游模型，支持排除指定的上游
+func (s *UpstreamSelector) SelectUpstreamWithExclusion(modelID string, excludeIDs map[string]bool) (*UpstreamSelection, error) {
+	// 获取缓存的上游列表
+	upstreams := s.getUpstreams(modelID)
 
 	if len(upstreams) == 0 {
 		return nil, ErrNoAvailableUpstream
 	}
 
+	// 过滤掉排除的上游
+	var availableUpstreams []*model.Upstream
+	for _, u := range upstreams {
+		if excludeIDs == nil || !excludeIDs[u.ID] {
+			availableUpstreams = append(availableUpstreams, u)
+		}
+	}
+
+	if len(availableUpstreams) == 0 {
+		return nil, ErrNoAvailableUpstream
+	}
+
 	// 按优先级和权重选择
-	upstream := s.selectByWeight(upstreams)
+	upstream := s.selectByWeight(availableUpstreams)
 	if upstream == nil {
 		return nil, ErrNoAvailableUpstream
 	}
@@ -95,6 +116,35 @@ func (s *UpstreamSelector) SelectUpstream(modelID string) (*UpstreamSelection, e
 		ProviderKey:  &apiKey,
 		DecryptedKey: decryptedKey,
 	}, nil
+}
+
+// getUpstreams 获取上游列表（带缓存）
+func (s *UpstreamSelector) getUpstreams(modelID string) []*model.Upstream {
+	s.mu.RLock()
+	entry, ok := s.cache[modelID]
+	s.mu.RUnlock()
+
+	// 检查缓存是否存在且未过期
+	now := time.Now()
+	if ok && entry != nil && entry.expiredAt.After(now) {
+		return entry.upstreams
+	}
+
+	// 从数据库加载
+	var upstreams []*model.Upstream
+	if err := s.db.Where("model_id = ?", modelID).Find(&upstreams).Error; err != nil {
+		return nil
+	}
+
+	// 更新缓存
+	s.mu.Lock()
+	s.cache[modelID] = &upstreamCacheEntry{
+		upstreams: upstreams,
+		expiredAt: now.Add(s.cacheTTL),
+	}
+	s.mu.Unlock()
+
+	return upstreams
 }
 
 // selectByWeight 根据权重选择上游模型
@@ -145,20 +195,6 @@ func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream) *model.Up
 	}
 
 	return priorityUpstreams[0]
-}
-
-// loadUpstreams 从数据库加载上游模型
-func (s *UpstreamSelector) loadUpstreams(modelID string) error {
-	var upstreams []*model.Upstream
-	if err := s.db.Where("model_id = ?", modelID).Find(&upstreams).Error; err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	s.cache[modelID] = upstreams
-	s.mu.Unlock()
-
-	return nil
 }
 
 // MarkUpstreamError 标记上游模型错误
@@ -248,7 +284,7 @@ func (s *UpstreamSelector) InvalidateCache(modelID string) {
 // InvalidateAllCache 使所有缓存失效
 func (s *UpstreamSelector) InvalidateAllCache() {
 	s.mu.Lock()
-	s.cache = make(map[string][]*model.Upstream)
+	s.cache = make(map[string]*upstreamCacheEntry)
 	s.mu.Unlock()
 }
 

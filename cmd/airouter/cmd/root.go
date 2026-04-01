@@ -120,7 +120,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	// 创建处理器
 	handlers := &router.Handlers{
 		Auth:     handler.NewAuthHandler(db, middleware.JWTConfig{Secret: cfg.Security.JWTSecret, Expire: cfg.Security.JWTExpire}),
-		Proxy:    handler.NewProxyHandler(db, logger, upstreamSelector),
+		Proxy:    handler.NewProxyHandler(db, logger, upstreamSelector, &cfg.Retry),
 		Provider: handler.NewProviderHandler(db, encryptor),
 		Model:    handler.NewModelHandler(db, upstreamSelector),
 		User:     handler.NewUserHandler(db, encryptor),
