@@ -66,7 +66,8 @@ type MessageContent interface{}
 
 // ContentBlock 内容块
 type ContentBlock struct {
-	Type      string       `json:"type"` // text, thinking, image, tool_use, tool_result
+	ID        string       `json:"id,omitempty"` // tool_use 内容块的唯一标识
+	Type      string       `json:"type"`         // text, thinking, image, tool_use, tool_result
 	Text      string       `json:"text,omitempty"`
 	Thinking  string       `json:"thinking,omitempty"` // thinking 类型的内容
 	Source    *ImageSource `json:"source,omitempty"`
