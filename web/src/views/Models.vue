@@ -22,6 +22,15 @@ const testingUpstreamId = ref<string | null>(null)
 const testResults = ref<Map<string, UpstreamTestResult>>(new Map())
 const testingModelId = ref<string | null>(null) // 批量测试中的模型 ID
 
+// 操作 loading 状态
+const savingModel = ref(false)
+const deletingModelId = ref<string | null>(null)
+const togglingModelId = ref<string | null>(null)
+const savingUpstream = ref(false)
+const deletingUpstreamId = ref<string | null>(null)
+const togglingUpstreamId = ref<string | null>(null)
+const resettingUpstreamId = ref<string | null>(null)
+
 // 表单使用 BU/M tokens 单位（用户友好）
 const modelForm = ref({
   name: '',
@@ -104,6 +113,7 @@ function openEditModelModal(model: Model) {
 }
 
 async function saveModel() {
+  savingModel.value = true
   try {
     // 提交时将 BU/M 转换为存储格式（纳 BU/K）
     const payload = {
@@ -120,11 +130,14 @@ async function saveModel() {
     loadData()
   } catch (e) {
     alert('保存失败')
+  } finally {
+    savingModel.value = false
   }
 }
 
 async function deleteModel(id: string) {
   if (!confirm('确定删除此模型？关联的上游模型也会被删除。')) return
+  deletingModelId.value = id
   try {
     await modelApi.delete(id)
     modelDetails.value.delete(id)
@@ -132,15 +145,20 @@ async function deleteModel(id: string) {
     loadData()
   } catch (e) {
     alert('删除失败')
+  } finally {
+    deletingModelId.value = null
   }
 }
 
 async function toggleModel(model: Model) {
+  togglingModelId.value = model.id
   try {
     await modelApi.toggle(model.id)
     loadData()
   } catch (e) {
     alert('操作失败')
+  } finally {
+    togglingModelId.value = null
   }
 }
 
@@ -172,6 +190,7 @@ function openEditUpstreamModal(upstream: Upstream, modelId: string) {
 }
 
 async function saveUpstream() {
+  savingUpstream.value = true
   try {
     if (editingUpstream.value) {
       await upstreamApi.update(editingUpstream.value.id, upstreamForm.value)
@@ -185,11 +204,14 @@ async function saveUpstream() {
     modelDetails.value.set(currentModelId.value, res.data)
   } catch (e) {
     alert('保存失败')
+  } finally {
+    savingUpstream.value = false
   }
 }
 
 async function deleteUpstream(upstreamId: string, modelId: string) {
   if (!confirm('确定删除此上游模型？')) return
+  deletingUpstreamId.value = upstreamId
   try {
     await upstreamApi.delete(upstreamId)
     modelDetails.value.delete(modelId)
@@ -197,10 +219,13 @@ async function deleteUpstream(upstreamId: string, modelId: string) {
     modelDetails.value.set(modelId, res.data)
   } catch (e) {
     alert('删除失败')
+  } finally {
+    deletingUpstreamId.value = null
   }
 }
 
 async function toggleUpstream(upstream: Upstream, modelId: string) {
+  togglingUpstreamId.value = upstream.id
   try {
     await upstreamApi.toggle(upstream.id)
     modelDetails.value.delete(modelId)
@@ -208,10 +233,13 @@ async function toggleUpstream(upstream: Upstream, modelId: string) {
     modelDetails.value.set(modelId, res.data)
   } catch (e) {
     alert('操作失败')
+  } finally {
+    togglingUpstreamId.value = null
   }
 }
 
 async function resetUpstreamStatus(upstream: Upstream, modelId: string) {
+  resettingUpstreamId.value = upstream.id
   try {
     await upstreamApi.resetStatus(upstream.id)
     modelDetails.value.delete(modelId)
@@ -219,6 +247,8 @@ async function resetUpstreamStatus(upstream: Upstream, modelId: string) {
     modelDetails.value.set(modelId, res.data)
   } catch (e) {
     alert('重置失败')
+  } finally {
+    resettingUpstreamId.value = null
   }
 }
 
@@ -409,11 +439,27 @@ onMounted(loadData)
                 </div>
               </td>
               <td class="px-6 py-4 text-right space-x-2">
-                <button @click="toggleModel(m)" class="text-blue-600 hover:text-blue-800 text-sm">
-                  {{ m.enabled ? '禁用' : '启用' }}
+                <button
+                  @click="toggleModel(m)"
+                  :disabled="togglingModelId === m.id"
+                  class="text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
+                >
+                  {{ togglingModelId === m.id ? '处理中...' : (m.enabled ? '禁用' : '启用') }}
                 </button>
-                <button @click="openEditModelModal(m)" class="text-yellow-600 hover:text-yellow-800 text-sm">编辑</button>
-                <button @click="deleteModel(m.id)" class="text-red-600 hover:text-red-800 text-sm">删除</button>
+                <button
+                  @click="openEditModelModal(m)"
+                  :disabled="togglingModelId === m.id || deletingModelId === m.id"
+                  class="text-yellow-600 hover:text-yellow-800 text-sm disabled:opacity-50"
+                >
+                  编辑
+                </button>
+                <button
+                  @click="deleteModel(m.id)"
+                  :disabled="deletingModelId === m.id"
+                  class="text-red-600 hover:text-red-800 text-sm disabled:opacity-50"
+                >
+                  {{ deletingModelId === m.id ? '删除中...' : '删除' }}
+                </button>
               </td>
             </tr>
             <!-- 上游模型展开行 -->
@@ -479,9 +525,10 @@ onMounted(loadData)
                         <button
                           v-if="u.status === 'error'"
                           @click="resetUpstreamStatus(u, m.id)"
-                          class="ml-1 text-xs text-orange-600 hover:text-orange-800 underline"
+                          :disabled="resettingUpstreamId === u.id"
+                          class="ml-1 text-xs text-orange-600 hover:text-orange-800 underline disabled:opacity-50"
                         >
-                          重置
+                          {{ resettingUpstreamId === u.id ? '重置中...' : '重置' }}
                         </button>
                         <span v-if="testResults.has(u.id)" class="ml-2">
                           <span
@@ -514,11 +561,27 @@ onMounted(loadData)
                           </span>
                           <span v-else>测试</span>
                         </button>
-                        <button @click="toggleUpstream(u, m.id)" class="text-blue-600 hover:text-blue-800">
-                          {{ u.enabled ? '禁用' : '启用' }}
+                        <button
+                          @click="toggleUpstream(u, m.id)"
+                          :disabled="togglingUpstreamId === u.id"
+                          class="text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                        >
+                          {{ togglingUpstreamId === u.id ? '处理中...' : (u.enabled ? '禁用' : '启用') }}
                         </button>
-                        <button @click="openEditUpstreamModal(u, m.id)" class="text-yellow-600 hover:text-yellow-800">编辑</button>
-                        <button @click="deleteUpstream(u.id, m.id)" class="text-red-600 hover:text-red-800">删除</button>
+                        <button
+                          @click="openEditUpstreamModal(u, m.id)"
+                          :disabled="togglingUpstreamId === u.id || deletingUpstreamId === u.id"
+                          class="text-yellow-600 hover:text-yellow-800 disabled:opacity-50"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          @click="deleteUpstream(u.id, m.id)"
+                          :disabled="deletingUpstreamId === u.id"
+                          class="text-red-600 hover:text-red-800 disabled:opacity-50"
+                        >
+                          {{ deletingUpstreamId === u.id ? '删除中...' : '删除' }}
+                        </button>
                       </td>
                     </tr>
                   </tbody>
@@ -585,7 +648,9 @@ onMounted(loadData)
           </div>
           <div class="flex justify-end gap-2 mt-6">
             <button type="button" @click="showModelModal = false" class="px-4 py-2 border rounded-lg dark:text-white">取消</button>
-            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">保存</button>
+            <button type="submit" :disabled="savingModel" class="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
+              {{ savingModel ? '保存中...' : '保存' }}
+            </button>
           </div>
         </form>
       </div>
@@ -630,7 +695,9 @@ onMounted(loadData)
           </div>
           <div class="flex justify-end gap-2 mt-6">
             <button type="button" @click="showUpstreamModal = false" class="px-4 py-2 border rounded-lg dark:text-white">取消</button>
-            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg">保存</button>
+            <button type="submit" :disabled="savingUpstream" class="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
+              {{ savingUpstream ? '保存中...' : '保存' }}
+            </button>
           </div>
         </form>
       </div>

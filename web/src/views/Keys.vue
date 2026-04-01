@@ -28,6 +28,11 @@ const editRateLimit = ref(60)
 const editQuotaLimit = ref<number | null>(null)
 const editExpiredAt = ref('')
 
+// 操作 loading 状态
+const togglingKeyId = ref<string | null>(null)
+const regeneratingKeyId = ref<string | null>(null)
+const deletingKeyId = ref<string | null>(null)
+
 async function loadUsers() {
   try {
     const res = await userApi.list()
@@ -139,12 +144,15 @@ async function toggleKeyStatus(key: UserKey) {
     return
   }
 
+  togglingKeyId.value = key.id
   try {
     await userApi.updateKey(key.id, { status: newStatus })
     await loadKeys()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { error?: string } } }
     alert(err.response?.data?.error || '操作失败')
+  } finally {
+    togglingKeyId.value = null
   }
 }
 
@@ -153,6 +161,7 @@ async function regenerateKey(key: UserKey) {
     return
   }
 
+  regeneratingKeyId.value = key.id
   try {
     const res = await userApi.regenerateKey(key.id)
     createdRawKey.value = res.raw_key
@@ -161,6 +170,8 @@ async function regenerateKey(key: UserKey) {
   } catch (e: unknown) {
     const err = e as { response?: { data?: { error?: string } } }
     alert(err.response?.data?.error || '刷新失败')
+  } finally {
+    regeneratingKeyId.value = null
   }
 }
 
@@ -169,12 +180,15 @@ async function deleteKey(key: UserKey) {
     return
   }
 
+  deletingKeyId.value = key.id
   try {
     await userApi.deleteKey(key.id)
     await loadKeys()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { error?: string } } }
     alert(err.response?.data?.error || '删除失败')
+  } finally {
+    deletingKeyId.value = null
   }
 }
 
@@ -267,32 +281,36 @@ onMounted(loadUsers)
                 <div class="flex items-center gap-2">
                   <button
                     @click="openEditModal(k)"
-                    class="text-blue-600 hover:text-blue-800 text-sm"
+                    class="text-blue-600 hover:text-blue-800 text-sm disabled:opacity-50"
                     title="编辑"
+                    :disabled="togglingKeyId === k.id || regeneratingKeyId === k.id || deletingKeyId === k.id"
                   >
                     编辑
                   </button>
                   <button
                     @click="toggleKeyStatus(k)"
                     :class="k.status === 'active' ? 'text-yellow-600 hover:text-yellow-800' : 'text-green-600 hover:text-green-800'"
-                    class="text-sm"
+                    class="text-sm disabled:opacity-50"
                     :title="k.status === 'active' ? '禁用' : '启用'"
+                    :disabled="togglingKeyId === k.id"
                   >
-                    {{ k.status === 'active' ? '禁用' : '启用' }}
+                    {{ togglingKeyId === k.id ? '处理中...' : (k.status === 'active' ? '禁用' : '启用') }}
                   </button>
                   <button
                     @click="regenerateKey(k)"
-                    class="text-purple-600 hover:text-purple-800 text-sm"
+                    class="text-purple-600 hover:text-purple-800 text-sm disabled:opacity-50"
                     title="刷新密钥"
+                    :disabled="regeneratingKeyId === k.id"
                   >
-                    刷新
+                    {{ regeneratingKeyId === k.id ? '刷新中...' : '刷新' }}
                   </button>
                   <button
                     @click="deleteKey(k)"
-                    class="text-red-600 hover:text-red-800 text-sm"
+                    class="text-red-600 hover:text-red-800 text-sm disabled:opacity-50"
                     title="删除"
+                    :disabled="deletingKeyId === k.id"
                   >
-                    删除
+                    {{ deletingKeyId === k.id ? '删除中...' : '删除' }}
                   </button>
                 </div>
               </td>
