@@ -24,11 +24,7 @@ type AuthSelectorConfig struct {
 // - /health → 无需认证
 func AuthSelector(cfg AuthSelectorConfig) gin.HandlerFunc {
 	// 预创建认证中间件
-	apiAuth := APIKeyAuth(APIKeyAuthConfig{
-		DB:        cfg.DB,
-		Encryptor: cfg.Encryptor,
-		JWTConfig: cfg.JWTConfig,
-	})
+	apiAuth := APIKeyAuth(APIKeyAuthConfig(cfg))
 	jwtAuth := JWTAuth(cfg.JWTConfig)
 
 	return func(c *gin.Context) {

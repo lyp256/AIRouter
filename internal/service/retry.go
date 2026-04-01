@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/lyp256/airouter/internal/config"
@@ -30,7 +29,6 @@ func (e *RetryableError) IsRetryable() bool {
 type RetryService struct {
 	cfg        *config.RetryConfig
 	httpClient *http.Client
-	mu         sync.Mutex
 }
 
 // NewRetryService 创建重试服务
