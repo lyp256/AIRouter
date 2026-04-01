@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { modelApi, upstreamApi } from '@/api/model'
 import { providerApi } from '@/api/provider'
 import type { Model, ModelWithUpstreams, Upstream, Provider, ProviderKey, UpstreamTestResult } from '@/api/types'
@@ -296,6 +296,22 @@ function getFilteredProviders(): Provider[] {
   return providers.value.filter(p => p.type === modelType)
 }
 
+// API 调用地址
+const apiBaseUrl = computed(() => window.location.origin)
+
+function getModelApiPath(model: Model): string {
+  if (model.provider_type === 'anthropic') {
+    return `${apiBaseUrl.value}/v1/messages`
+  }
+  return `${apiBaseUrl.value}/v1/chat/completions`
+}
+
+function copyModelApiInfo(model: Model) {
+  const url = getModelApiPath(model)
+  const text = `API 地址: ${url}\n模型名称: ${model.name}`
+  navigator.clipboard.writeText(text)
+}
+
 onMounted(loadData)
 </script>
 
@@ -303,9 +319,21 @@ onMounted(loadData)
   <div class="p-6">
     <div class="flex justify-between items-center mb-6">
       <h1 class="text-2xl font-bold text-gray-800 dark:text-white">模型管理</h1>
-      <button @click="openCreateModelModal" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-        添加模型
-      </button>
+      <div class="flex gap-2">
+        <button
+          @click="loadData"
+          :disabled="loading"
+          class="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+          title="刷新"
+        >
+          <svg class="w-4 h-4" :class="{ 'animate-spin': loading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+        <button @click="openCreateModelModal" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+          添加模型
+        </button>
+      </div>
     </div>
 
     <div v-if="loading" class="flex items-center justify-center py-16 bg-white dark:bg-gray-800 rounded-lg shadow">
@@ -326,6 +354,7 @@ onMounted(loadData)
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">输入价格</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">输出价格</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">状态</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">API 地址</th>
             <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">操作</th>
           </tr>
         </thead>
@@ -363,6 +392,22 @@ onMounted(loadData)
                   {{ m.enabled ? '启用' : '禁用' }}
                 </span>
               </td>
+              <td class="px-6 py-4">
+                <div class="flex items-center gap-1">
+                  <span class="text-xs font-mono text-gray-500 dark:text-gray-400 truncate max-w-[200px]" :title="getModelApiPath(m)">
+                    {{ getModelApiPath(m) }}
+                  </span>
+                  <button
+                    @click="copyModelApiInfo(m)"
+                    class="text-gray-400 hover:text-blue-600 shrink-0"
+                    title="复制调用信息"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                  </button>
+                </div>
+              </td>
               <td class="px-6 py-4 text-right space-x-2">
                 <button @click="toggleModel(m)" class="text-blue-600 hover:text-blue-800 text-sm">
                   {{ m.enabled ? '禁用' : '启用' }}
@@ -373,7 +418,7 @@ onMounted(loadData)
             </tr>
             <!-- 上游模型展开行 -->
             <tr v-if="expandedModels.has(m.id)" class="bg-gray-50 dark:bg-gray-900">
-              <td colspan="8" class="px-6 py-4">
+              <td colspan="9" class="px-6 py-4">
                 <div class="flex justify-between items-center mb-3">
                   <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">上游模型配置</h4>
                   <div class="flex gap-2">
