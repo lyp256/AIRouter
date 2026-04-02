@@ -1,13 +1,14 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
-	"sync"
 	"time"
 
+	"github.com/lyp256/airouter/internal/cache"
 	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/model"
 	"gorm.io/gorm"
@@ -28,36 +29,23 @@ type UpstreamSelection struct {
 	DecryptedKey string
 }
 
-// upstreamCacheEntry 缓存条目
-type upstreamCacheEntry struct {
-	upstreams []*model.Upstream
-	expiredAt time.Time
-}
-
 // UpstreamSelector 上游模型选择器
 type UpstreamSelector struct {
 	db        *gorm.DB
 	encryptor *crypto.Encryptor
-	mu        sync.RWMutex
-	cache     map[string]*upstreamCacheEntry // modelID -> cache entry
-	cacheTTL  time.Duration                  // 缓存过期时间
+	cache     cache.Cache
+	cacheTTL  time.Duration
 }
 
 // NewUpstreamSelector 创建上游模型选择器
-func NewUpstreamSelector(db *gorm.DB, encryptor *crypto.Encryptor) *UpstreamSelector {
+func NewUpstreamSelector(db *gorm.DB, encryptor *crypto.Encryptor, c cache.Cache) *UpstreamSelector {
+	ttl := 10 * time.Minute
 	return &UpstreamSelector{
 		db:        db,
 		encryptor: encryptor,
-		cache:     make(map[string]*upstreamCacheEntry),
-		cacheTTL:  5 * time.Minute, // 默认缓存 5 分钟
+		cache:     c,
+		cacheTTL:  ttl,
 	}
-}
-
-// SetCacheTTL 设置缓存过期时间
-func (s *UpstreamSelector) SetCacheTTL(ttl time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.cacheTTL = ttl
 }
 
 // SelectUpstream 选择一个上游模型
@@ -92,15 +80,29 @@ func (s *UpstreamSelector) SelectUpstreamWithExclusion(modelID string, excludeID
 		return nil, ErrNoAvailableUpstream
 	}
 
-	// 获取关联的 Provider
+	ctx := context.Background()
+
+	// 获取关联的 Provider（带缓存）
 	var provider model.Provider
-	if err := s.db.First(&provider, "id = ?", upstream.ProviderID).Error; err != nil {
+	if err := s.cache.Once(ctx, fmt.Sprintf("provider:%s", upstream.ProviderID), &provider, s.cacheTTL, func() (interface{}, error) {
+		var p model.Provider
+		if err := s.db.First(&p, "id = ?", upstream.ProviderID).Error; err != nil {
+			return nil, err
+		}
+		return p, nil
+	}); err != nil {
 		return nil, err
 	}
 
-	// 获取关联的 ProviderKey
+	// 获取关联的 ProviderKey（带缓存）
 	var apiKey model.ProviderKey
-	if err := s.db.First(&apiKey, "id = ?", upstream.ProviderKeyID).Error; err != nil {
+	if err := s.cache.Once(ctx, fmt.Sprintf("provider_key:%s", upstream.ProviderKeyID), &apiKey, s.cacheTTL, func() (interface{}, error) {
+		var k model.ProviderKey
+		if err := s.db.First(&k, "id = ?", upstream.ProviderKeyID).Error; err != nil {
+			return nil, err
+		}
+		return k, nil
+	}); err != nil {
 		return nil, err
 	}
 
@@ -120,30 +122,17 @@ func (s *UpstreamSelector) SelectUpstreamWithExclusion(modelID string, excludeID
 
 // getUpstreams 获取上游列表（带缓存）
 func (s *UpstreamSelector) getUpstreams(modelID string) []*model.Upstream {
-	s.mu.RLock()
-	entry, ok := s.cache[modelID]
-	s.mu.RUnlock()
-
-	// 检查缓存是否存在且未过期
-	now := time.Now()
-	if ok && entry != nil && entry.expiredAt.After(now) {
-		return entry.upstreams
-	}
-
-	// 从数据库加载
+	ctx := context.Background()
 	var upstreams []*model.Upstream
-	if err := s.db.Where("model_id = ?", modelID).Find(&upstreams).Error; err != nil {
+	if err := s.cache.Once(ctx, fmt.Sprintf("upstreams:model:%s", modelID), &upstreams, s.cacheTTL, func() (interface{}, error) {
+		var list []*model.Upstream
+		if err := s.db.Where("model_id = ?", modelID).Find(&list).Error; err != nil {
+			return nil, err
+		}
+		return list, nil
+	}); err != nil {
 		return nil
 	}
-
-	// 更新缓存
-	s.mu.Lock()
-	s.cache[modelID] = &upstreamCacheEntry{
-		upstreams: upstreams,
-		expiredAt: now.Add(s.cacheTTL),
-	}
-	s.mu.Unlock()
-
 	return upstreams
 }
 
@@ -199,11 +188,17 @@ func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream) *model.Up
 
 // MarkUpstreamError 标记上游模型错误
 func (s *UpstreamSelector) MarkUpstreamError(upstreamID string) error {
-	return s.db.Model(&model.Upstream{}).
+	err := s.db.Model(&model.Upstream{}).
 		Where("id = ?", upstreamID).
 		Updates(map[string]interface{}{
 			"status": "error",
 		}).Error
+	if err != nil {
+		return err
+	}
+	// 清除所有相关的上游缓存（无法从 upstreamID 反查 modelID，清除全部）
+	s.InvalidateAllCache()
+	return nil
 }
 
 // MarkUpstreamSuccess 标记上游模型成功
@@ -218,23 +213,35 @@ func (s *UpstreamSelector) MarkUpstreamSuccess(upstreamID string) error {
 // MarkAPIKeyError 标记供应商密钥错误
 func (s *UpstreamSelector) MarkAPIKeyError(apiKeyID string) error {
 	now := time.Now()
-	return s.db.Model(&model.ProviderKey{}).
+	err := s.db.Model(&model.ProviderKey{}).
 		Where("id = ?", apiKeyID).
 		Updates(map[string]interface{}{
 			"last_error_at": now,
 			"status":        "error",
 		}).Error
+	if err != nil {
+		return err
+	}
+	// 清除密钥缓存
+	_ = s.cache.Delete(context.Background(), fmt.Sprintf("provider_key:%s", apiKeyID))
+	return nil
 }
 
 // MarkAPIKeySuccess 标记供应商密钥成功
 func (s *UpstreamSelector) MarkAPIKeySuccess(apiKeyID string) error {
 	now := time.Now()
-	return s.db.Model(&model.ProviderKey{}).
+	err := s.db.Model(&model.ProviderKey{}).
 		Where("id = ?", apiKeyID).
 		Updates(map[string]interface{}{
 			"last_used_at": now,
 			"status":       "active",
 		}).Error
+	if err != nil {
+		return err
+	}
+	// 清除密钥缓存，下次请求获取最新状态
+	_ = s.cache.Delete(context.Background(), fmt.Sprintf("provider_key:%s", apiKeyID))
+	return nil
 }
 
 // UpdateQuotaUsed 更新已使用配额
@@ -276,16 +283,18 @@ func (s *UpstreamSelector) GetUpstreamSelection(upstreamID string) (*UpstreamSel
 
 // InvalidateCache 使缓存失效
 func (s *UpstreamSelector) InvalidateCache(modelID string) {
-	s.mu.Lock()
-	delete(s.cache, modelID)
-	s.mu.Unlock()
+	_ = s.cache.Delete(context.Background(), fmt.Sprintf("upstreams:model:%s", modelID))
 }
 
 // InvalidateAllCache 使所有缓存失效
 func (s *UpstreamSelector) InvalidateAllCache() {
-	s.mu.Lock()
-	s.cache = make(map[string]*upstreamCacheEntry)
-	s.mu.Unlock()
+	// 由于 cache 接口不支持通配符删除，逐一删除 modelID 对应的缓存
+	// 通过查询所有模型 ID 来清理
+	var modelIDs []string
+	s.db.Model(&model.Model{}).Pluck("id", &modelIDs)
+	for _, id := range modelIDs {
+		_ = s.cache.Delete(context.Background(), fmt.Sprintf("upstreams:model:%s", id))
+	}
 }
 
 // GetUpstreamsByModel 获取模型的所有上游模型

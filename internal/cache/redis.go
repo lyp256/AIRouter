@@ -1,0 +1,88 @@
+package cache
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	gorediscache "github.com/go-redis/cache/v9"
+	"github.com/lyp256/airouter/internal/config"
+	"github.com/redis/go-redis/v9"
+)
+
+// redisCache 基于 go-redis/cache/v9 的 Redis 缓存实现
+type redisCache struct {
+	client *gorediscache.Cache
+	ttl    time.Duration
+}
+
+func newRedisCache(cfg *config.CacheConfig) (*redisCache, error) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+
+	// 测试连接
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		return nil, fmt.Errorf("连接 Redis 失败: %w", err)
+	}
+
+	ttl := cfg.TTL
+	if ttl == 0 {
+		ttl = 10 * time.Minute
+	}
+
+	client := gorediscache.New(&gorediscache.Options{
+		Redis: rdb,
+	})
+
+	return &redisCache{
+		client: client,
+		ttl:    ttl,
+	}, nil
+}
+
+func (r *redisCache) Get(ctx context.Context, key string, value interface{}) error {
+	err := r.client.Get(ctx, key, value)
+	if err != nil {
+		if err == gorediscache.ErrCacheMiss {
+			return ErrCacheMiss
+		}
+		return err
+	}
+	return nil
+}
+
+func (r *redisCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+	if ttl == 0 {
+		ttl = r.ttl
+	}
+	return r.client.Set(&gorediscache.Item{
+		Ctx:   ctx,
+		Key:   key,
+		Value: value,
+		TTL:   ttl,
+	})
+}
+
+func (r *redisCache) Delete(ctx context.Context, key string) error {
+	return r.client.Delete(ctx, key)
+}
+
+func (r *redisCache) Once(ctx context.Context, key string, value interface{}, ttl time.Duration, do func() (interface{}, error)) error {
+	if ttl == 0 {
+		ttl = r.ttl
+	}
+	return r.client.Once(&gorediscache.Item{
+		Ctx:   ctx,
+		Key:   key,
+		Value: value,
+		TTL:   ttl,
+		Do: func(*gorediscache.Item) (interface{}, error) {
+			return do()
+		},
+	})
+}

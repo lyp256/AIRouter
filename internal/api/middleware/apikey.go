@@ -1,15 +1,16 @@
 package middleware
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/lyp256/airouter/internal/cache"
 	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/model"
 	"gorm.io/gorm"
@@ -19,55 +20,84 @@ import (
 type APIKeyAuthConfig struct {
 	DB        *gorm.DB
 	Encryptor *crypto.Encryptor
-	JWTConfig JWTConfig // 用于 JWT+KeyID 认证
+	JWTConfig JWTConfig
+	Cache     cache.Cache
 }
 
-// apiKeyCache API Key 缓存条目
-type apiKeyCache struct {
-	keyID      string
-	userID     string
-	keyHash    string // 原始 key 的 hash
-	decrypted  string // 解密后的 key
-	quotaUsed  int64
-	quotaLimit int64
-	expiredAt  *time.Time
-	status     string
+// userKeyCacheData 用户密钥缓存数据
+type userKeyCacheData struct {
+	KeyID     string `json:"key_id"`
+	UserID    string `json:"user_id"`
+	KeyHash   string `json:"key_hash"`
+	Decrypted string `json:"decrypted"`
 }
 
 // APIKeyAuthenticator API Key 认证器（带缓存）
 type APIKeyAuthenticator struct {
 	db        *gorm.DB
 	encryptor *crypto.Encryptor
-	mu        sync.RWMutex
-	cache     map[string]*apiKeyCache // keyID -> cache entry
-	keyIndex  map[string]string       // keyHash -> keyID (用于快速查找)
-	lastLoad  time.Time
+	cache     cache.Cache
 }
 
 // NewAPIKeyAuthenticator 创建 API Key 认证器
-func NewAPIKeyAuthenticator(db *gorm.DB, encryptor *crypto.Encryptor) *APIKeyAuthenticator {
+func NewAPIKeyAuthenticator(db *gorm.DB, encryptor *crypto.Encryptor, c cache.Cache) *APIKeyAuthenticator {
 	return &APIKeyAuthenticator{
 		db:        db,
 		encryptor: encryptor,
-		cache:     make(map[string]*apiKeyCache),
-		keyIndex:  make(map[string]string),
+		cache:     c,
 	}
 }
 
-// RefreshCache 刷新缓存
-func (a *APIKeyAuthenticator) RefreshCache() error {
-	var userKeys []model.UserKey
-	if err := a.db.Where("status = ?", "active").Find(&userKeys).Error; err != nil {
-		return err
+// Authenticate 通过 API Key 认证
+func (a *APIKeyAuthenticator) Authenticate(apiKey string) (*model.UserKey, error) {
+	ctx := context.Background()
+	keyHash := sha256Hash(apiKey)
+
+	// 通过缓存查找 keyHash 对应的 keyID
+	var cacheData userKeyCacheData
+	err := a.cache.Once(ctx, "user_key:hash:"+keyHash, &cacheData, 5*time.Minute, func() (interface{}, error) {
+		// 缓存未命中，从数据库全量加载活跃的 UserKey 并建立索引
+		return a.loadKeyByHash(keyHash)
+	})
+	if err != nil {
+		if err == cache.ErrCacheMiss {
+			return nil, nil // 未找到
+		}
+		return nil, err
 	}
 
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	// 验证原始 key 是否匹配（双重验证）
+	if cacheData.Decrypted != apiKey {
+		return nil, nil
+	}
 
-	// 重建缓存
-	newCache := make(map[string]*apiKeyCache)
-	newKeyIndex := make(map[string]string)
+	// 获取最新的用户密钥信息（短缓存，包含配额）
+	var userKey model.UserKey
+	err = a.cache.Once(ctx, "user_key:id:"+cacheData.KeyID, &userKey, 1*time.Minute, func() (interface{}, error) {
+		var uk model.UserKey
+		if err := a.db.First(&uk, "id = ? AND status = ?", cacheData.KeyID, "active").Error; err != nil {
+			return nil, err
+		}
+		return uk, nil
+	})
+	if err != nil {
+		if err == cache.ErrCacheMiss {
+			return nil, nil
+		}
+		return nil, err
+	}
 
+	return &userKey, nil
+}
+
+// loadKeyByHash 从数据库加载所有活跃密钥，找到匹配 hash 的密钥
+func (a *APIKeyAuthenticator) loadKeyByHash(targetHash string) (*userKeyCacheData, error) {
+	var userKeys []model.UserKey
+	if err := a.db.Where("status = ?", "active").Find(&userKeys).Error; err != nil {
+		return nil, err
+	}
+
+	// 同时缓存所有密钥的 hash 映射
 	for i := range userKeys {
 		decryptedKey, err := a.encryptor.Decrypt(userKeys[i].Key)
 		if err != nil {
@@ -75,68 +105,24 @@ func (a *APIKeyAuthenticator) RefreshCache() error {
 		}
 
 		keyHash := sha256Hash(decryptedKey)
-		newCache[userKeys[i].ID] = &apiKeyCache{
-			keyID:      userKeys[i].ID,
-			userID:     userKeys[i].UserID,
-			keyHash:    keyHash,
-			decrypted:  decryptedKey,
-			quotaUsed:  userKeys[i].QuotaUsed,
-			quotaLimit: userKeys[i].QuotaLimit,
-			expiredAt:  userKeys[i].ExpiredAt,
-			status:     userKeys[i].Status,
+		data := &userKeyCacheData{
+			KeyID:     userKeys[i].ID,
+			UserID:    userKeys[i].UserID,
+			KeyHash:   keyHash,
+			Decrypted: decryptedKey,
 		}
-		newKeyIndex[keyHash] = userKeys[i].ID
-	}
 
-	a.cache = newCache
-	a.keyIndex = newKeyIndex
-	a.lastLoad = time.Now()
-	return nil
-}
+		// 缓存每个密钥的 hash 映射
+		_ = a.cache.Set(context.Background(), "user_key:hash:"+keyHash, data, 5*time.Minute)
+		// 缓存 ID 到 keyID 的映射（用于快速失效）
+		_ = a.cache.Set(context.Background(), "user_key:id2hash:"+userKeys[i].ID, keyHash, 5*time.Minute)
 
-// Authenticate 通过 API Key 认证
-func (a *APIKeyAuthenticator) Authenticate(apiKey string) (*model.UserKey, error) {
-	// 如果缓存为空或过期（5分钟），刷新缓存
-	a.mu.RLock()
-	cacheEmpty := len(a.cache) == 0
-	cacheStale := time.Since(a.lastLoad) > 5*time.Minute
-	a.mu.RUnlock()
-
-	if cacheEmpty || cacheStale {
-		if err := a.RefreshCache(); err != nil {
-			return nil, err
+		if keyHash == targetHash {
+			return data, nil
 		}
 	}
 
-	// 计算 API Key 的 hash
-	keyHash := sha256Hash(apiKey)
-
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	// 通过 hash 快速查找
-	keyID, exists := a.keyIndex[keyHash]
-	if !exists {
-		return nil, nil // 未找到
-	}
-
-	entry, exists := a.cache[keyID]
-	if !exists {
-		return nil, nil
-	}
-
-	// 验证原始 key 是否匹配（双重验证）
-	if entry.decrypted != apiKey {
-		return nil, nil
-	}
-
-	// 从数据库获取最新的配额信息
-	var userKey model.UserKey
-	if err := a.db.First(&userKey, "id = ?", keyID).Error; err != nil {
-		return nil, err
-	}
-
-	return &userKey, nil
+	return nil, cache.ErrCacheMiss
 }
 
 // sha256Hash 计算 SHA256 hash
@@ -151,7 +137,7 @@ func sha256Hash(s string) string {
 // 2. JWT + KeyID 认证: Authorization: Bearer <jwt_token>, X-Key-ID: <key_id>
 func APIKeyAuth(cfg APIKeyAuthConfig) gin.HandlerFunc {
 	// 创建认证器
-	authenticator := NewAPIKeyAuthenticator(cfg.DB, cfg.Encryptor)
+	authenticator := NewAPIKeyAuthenticator(cfg.DB, cfg.Encryptor, cfg.Cache)
 
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -286,4 +272,18 @@ func GetUserKey(c *gin.Context) *model.UserKey {
 		return nil
 	}
 	return key.(*model.UserKey)
+}
+
+// InvalidateUserKeyCache 使用户密钥缓存失效
+func InvalidateUserKeyCache(c cache.Cache, keyID string) {
+	ctx := context.Background()
+	// 通过 ID 找到 hash，然后清理两个缓存
+	var hashData struct {
+		Hash string `json:"hash"`
+	}
+	if err := c.Get(ctx, "user_key:id2hash:"+keyID, &hashData); err == nil {
+		_ = c.Delete(ctx, "user_key:hash:"+hashData.Hash)
+	}
+	_ = c.Delete(ctx, "user_key:id2hash:"+keyID)
+	_ = c.Delete(ctx, "user_key:id:"+keyID)
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lyp256/airouter/internal/api/middleware"
+	"github.com/lyp256/airouter/internal/cache"
 	"github.com/lyp256/airouter/internal/config"
 	"github.com/lyp256/airouter/internal/model"
 	"github.com/lyp256/airouter/internal/provider"
@@ -29,10 +31,11 @@ type ProxyHandler struct {
 	upstreamSelector *service.UpstreamSelector
 	retryService     *service.RetryService
 	retryConfig      *config.RetryConfig
+	cache            cache.Cache
 }
 
 // NewProxyHandler 创建代理处理器
-func NewProxyHandler(db *gorm.DB, logger *zap.Logger, upstreamSelector *service.UpstreamSelector, retryConfig *config.RetryConfig) *ProxyHandler {
+func NewProxyHandler(db *gorm.DB, logger *zap.Logger, upstreamSelector *service.UpstreamSelector, retryConfig *config.RetryConfig, c cache.Cache) *ProxyHandler {
 	var retryService *service.RetryService
 	if retryConfig != nil && retryConfig.Enabled {
 		retryService = service.NewRetryService(retryConfig, nil)
@@ -43,6 +46,7 @@ func NewProxyHandler(db *gorm.DB, logger *zap.Logger, upstreamSelector *service.
 		upstreamSelector: upstreamSelector,
 		retryService:     retryService,
 		retryConfig:      retryConfig,
+		cache:            c,
 	}
 }
 
@@ -60,9 +64,8 @@ func (h *ProxyHandler) ChatCompletions(c *gin.Context) {
 	}
 
 	// 获取模型配置 - OpenAI 协议只匹配 openai 或 openai_compatible 类型
-	var modelCfg model.Model
-	result := h.db.Where("name = ? AND enabled = ? AND provider_type IN ?", req.Model, true, []string{"openai", "openai_compatible"}).First(&modelCfg)
-	if result.Error != nil {
+	modelCfg, err := h.getModelByName(c.Request.Context(), req.Model, []string{"openai", "openai_compatible"})
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
 				"message": "模型不存在或未启用: " + req.Model,
@@ -103,12 +106,12 @@ func (h *ProxyHandler) ChatCompletions(c *gin.Context) {
 			APIKey:  selection.DecryptedKey,
 		})
 		reqBody := h.prepareRequestBody(&req, selection.Upstream)
-		h.handleStreamChat(c, client, reqBody, selection, modelCfg, startTime, requestID)
+		h.handleStreamChat(c, client, reqBody, selection, *modelCfg, startTime, requestID)
 		return
 	}
 
 	// 非流式请求 - 支持重试
-	h.handleNormalChatWithRetry(c, &req, &modelCfg, startTime, requestID)
+	h.handleNormalChatWithRetry(c, &req, modelCfg, startTime, requestID)
 }
 
 // prepareRequestBody 准备请求体
@@ -517,9 +520,8 @@ func (h *ProxyHandler) Completions(c *gin.Context) {
 	}
 
 	// 获取模型配置 - OpenAI 协议只匹配 openai 或 openai_compatible 类型
-	var modelCfg model.Model
-	result := h.db.Where("name = ? AND enabled = ? AND provider_type IN ?", req.Model, true, []string{"openai", "openai_compatible"}).First(&modelCfg)
-	if result.Error != nil {
+	modelCfg, err := h.getModelByName(c.Request.Context(), req.Model, []string{"openai", "openai_compatible"})
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
 				"message": "模型不存在或未启用: " + req.Model,
@@ -566,12 +568,12 @@ func (h *ProxyHandler) Completions(c *gin.Context) {
 
 	// 处理流式请求
 	if req.Stream {
-		h.handleStreamCompletion(c, client, reqBody, selection, modelCfg, startTime, requestID)
+		h.handleStreamCompletion(c, client, reqBody, selection, *modelCfg, startTime, requestID)
 		return
 	}
 
 	// 非流式请求
-	h.handleNormalCompletion(c, client, reqBody, selection, modelCfg, startTime, requestID)
+	h.handleNormalCompletion(c, client, reqBody, selection, *modelCfg, startTime, requestID)
 }
 
 // prepareCompletionRequestBody 准备 Completions 请求体
@@ -881,9 +883,8 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 	}
 
 	// 获取模型配置 - Embeddings 只匹配 openai 或 openai_compatible 类型
-	var modelCfg model.Model
-	result := h.db.Where("name = ? AND enabled = ? AND provider_type IN ?", req.Model, true, []string{"openai", "openai_compatible"}).First(&modelCfg)
-	if result.Error != nil {
+	modelCfg, err := h.getModelByName(c.Request.Context(), req.Model, []string{"openai", "openai_compatible"})
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
 				"message": "模型不存在或未启用",
@@ -936,7 +937,7 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 
 	startTime := time.Now()
 
-	// 获取 API 路径，如果供应商配置了则使用，否则使用默认路径
+	// 获取 API 路径
 	apiPath := selection.Provider.APIPath
 	if apiPath == "" {
 		apiPath = "/v1/embeddings"
@@ -953,8 +954,7 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 		h.logger.Error("请求上游失败", zap.Error(err))
 		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
+		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
 				"message": "请求上游服务失败: " + err.Error(),
@@ -964,13 +964,11 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 		return
 	}
 
-	// 检查上游错误响应
 	if resp.StatusCode >= 400 {
 		h.logger.Error("上游返回错误",
 			zap.Int("status", resp.StatusCode),
 			zap.String("body", string(resp.Body)))
 		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		// 尝试解析上游错误响应
 		var upstreamErr openai.ErrorResponse
 		errMsg := string(resp.Body)
 		if err := json.Unmarshal(resp.Body, &upstreamErr); err == nil && upstreamErr.Message != "" {
@@ -983,24 +981,21 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 				},
 			})
 		} else {
-			// 无法解析，原样返回
 			c.Data(resp.StatusCode, "application/json", resp.Body)
 		}
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
+		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
 		return
 	}
 
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
-	// 记录使用日志（无论是否有 usage 都记录）
 	var usage openai.Usage
 	var embResp openai.EmbeddingResponse
 	if err := json.Unmarshal(resp.Body, &embResp); err == nil && embResp.Usage != nil {
 		usage = *embResp.Usage
 	}
-	h.logUsage(c, selection, &modelCfg, &usage, latency, 0, latency, "success", 200, "")
+	h.logUsage(c, selection, modelCfg, &usage, latency, 0, latency, "success", 200, "")
 
 	c.Data(resp.StatusCode, "application/json", resp.Body)
 }
@@ -1129,6 +1124,36 @@ func randomInt(min, max int) int {
 	return min + rand.Intn(max-min+1)
 }
 
+// getModelByName 通过模型名称和供应商类型获取模型配置（带缓存）
+func (h *ProxyHandler) getModelByName(ctx context.Context, name string, providerTypes []string) (*model.Model, error) {
+	cacheKey := fmt.Sprintf("model:name:%s:type:%v", name, providerTypes)
+	var m model.Model
+	if err := h.cache.Once(ctx, cacheKey, &m, 10*time.Minute, func() (interface{}, error) {
+		var result model.Model
+		if err := h.db.Where("name = ? AND enabled = ? AND provider_type IN ?", name, true, providerTypes).First(&result).Error; err != nil {
+			return nil, err
+		}
+		return result, nil
+	}); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// InvalidateModelCache 使模型缓存失效
+func (h *ProxyHandler) InvalidateModelCache(name string) {
+	ctx := context.Background()
+	// 清除可能的多种 providerTypes 组合缓存
+	for _, types := range [][]string{
+		{"openai", "openai_compatible"},
+		{"openai"},
+		{"anthropic"},
+	} {
+		_ = h.cache.Delete(ctx, fmt.Sprintf("model:name:%s:type:%v", name, types))
+	}
+	_ = h.cache.Delete(ctx, "models:enabled")
+}
+
 // AnthropicMessages Anthropic Messages API
 func (h *ProxyHandler) AnthropicMessages(c *gin.Context) {
 	var req anthropic.MessagesRequest
@@ -1141,9 +1166,8 @@ func (h *ProxyHandler) AnthropicMessages(c *gin.Context) {
 	}
 
 	// 获取模型配置 - Anthropic 协议只匹配 anthropic 类型
-	var modelCfg model.Model
-	result := h.db.Where("name = ? AND enabled = ? AND provider_type = ?", req.Model, true, "anthropic").First(&modelCfg)
-	if result.Error != nil {
+	modelCfg, err := h.getModelByName(c.Request.Context(), req.Model, []string{"anthropic"})
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"type":    "invalid_request_error",
 			"message": "模型不存在或未启用: " + req.Model,
@@ -1174,7 +1198,7 @@ func (h *ProxyHandler) AnthropicMessages(c *gin.Context) {
 	requestID := middleware.GetRequestID(c)
 
 	// 使用原生 Anthropic 客户端
-	h.handleAnthropicNative(c, &req, selection, &modelCfg, startTime, requestID)
+	h.handleAnthropicNative(c, &req, selection, modelCfg, startTime, requestID)
 }
 
 // handleAnthropicNative 使用原生 Anthropic API 处理

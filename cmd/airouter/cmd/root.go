@@ -12,6 +12,7 @@ import (
 
 	"github.com/lyp256/airouter/internal/api/handler"
 	"github.com/lyp256/airouter/internal/api/middleware"
+	"github.com/lyp256/airouter/internal/cache"
 	"github.com/lyp256/airouter/internal/config"
 	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/router"
@@ -109,26 +110,32 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal("初始化加密器失败", zap.Error(err))
 	}
 
+	// 初始化缓存
+	cacheInstance, err := cache.New(&cfg.Cache)
+	if err != nil {
+		logger.Fatal("初始化缓存失败", zap.Error(err))
+	}
+
 	// 初始化管理员账户
 	if err := handler.InitAdmin(db, cfg.Admin.Username, cfg.Admin.Password, cfg.Admin.Email); err != nil {
 		logger.Error("初始化管理员账户失败", zap.Error(err))
 	}
 
 	// 初始化上游模型选择器
-	upstreamSelector := service.NewUpstreamSelector(db, encryptor)
+	upstreamSelector := service.NewUpstreamSelector(db, encryptor, cacheInstance)
 
 	// 创建处理器
 	handlers := &router.Handlers{
 		Auth:     handler.NewAuthHandler(db, middleware.JWTConfig{Secret: cfg.Security.JWTSecret, Expire: cfg.Security.JWTExpire}),
-		Proxy:    handler.NewProxyHandler(db, logger, upstreamSelector, &cfg.Retry),
+		Proxy:    handler.NewProxyHandler(db, logger, upstreamSelector, &cfg.Retry, cacheInstance),
 		Provider: handler.NewProviderHandler(db, encryptor),
-		Model:    handler.NewModelHandler(db, upstreamSelector),
+		Model:    handler.NewModelHandler(db, upstreamSelector, cacheInstance),
 		User:     handler.NewUserHandler(db, encryptor),
 		Stats:    handler.NewStatsHandler(db),
 	}
 
 	// 创建路由器
-	routerEngine := router.Setup(cfg, db, encryptor, logger, handlers)
+	routerEngine := router.Setup(cfg, db, encryptor, logger, cacheInstance, handlers)
 
 	// 启动服务
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
