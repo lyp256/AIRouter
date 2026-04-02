@@ -1205,59 +1205,117 @@ func (h *ProxyHandler) AnthropicMessages(c *gin.Context) {
 func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.MessagesRequest,
 	selection *service.UpstreamSelection, modelCfg *model.Model, startTime time.Time, requestID string) {
 
-	// 获取 API 路径，如果供应商配置了则使用，否则使用默认路径
-	apiPath := selection.Provider.APIPath
-	if apiPath == "" {
-		apiPath = "/v1/messages"
-	}
-
-	client := provider.NewAnthropicClient(provider.AnthropicConfig{
-		BaseURL: selection.Provider.BaseURL,
-		APIKey:  selection.DecryptedKey,
-		APIPath: apiPath,
-	})
+	// 提取客户端的 anthropic-beta 头用于透传
+	betaHeader := c.GetHeader("anthropic-beta")
 
 	// 替换为上游实际模型名
 	req.Model = selection.Upstream.ProviderModel
 
 	// 处理流式请求
 	if req.Stream {
+		apiPath := selection.Provider.APIPath
+		if apiPath == "" {
+			apiPath = "/v1/messages"
+		}
+		client := provider.NewAnthropicClient(provider.AnthropicConfig{
+			BaseURL:    selection.Provider.BaseURL,
+			APIKey:     selection.DecryptedKey,
+			APIPath:    apiPath,
+			BetaHeader: betaHeader,
+		})
 		h.handleAnthropicStream(c, client, req, selection, modelCfg, startTime, requestID)
 		return
 	}
 
-	// 非流式请求
-	resp, err := client.Messages(c.Request.Context(), *req)
-	latency := time.Since(startTime).Milliseconds()
+	// 非流式请求（支持重试）
+	maxRetries := 3
+	if h.retryConfig != nil && h.retryConfig.Enabled {
+		maxRetries = h.retryConfig.MaxAttempts
+	}
 
-	if err != nil {
-		h.logger.Error("请求 Anthropic 失败", zap.Error(err), zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
-		// 记录失败日志
-		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{
-			"type":    "upstream_error",
-			"message": "请求上游服务失败: " + err.Error(),
+	excludeUpstreams := make(map[string]bool)
+	var lastErr error
+	var lastErrMsg string
+	var lastStatusCode int
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 选择上游模型（排除已失败的上游）
+		var sel *service.UpstreamSelection
+		var err error
+		if attempt == 1 {
+			sel = selection
+		} else {
+			sel, err = h.upstreamSelector.SelectUpstreamWithExclusion(modelCfg.ID, excludeUpstreams)
+			if err != nil {
+				if lastErr != nil {
+					break
+				}
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"type":    "internal_error",
+					"message": "没有可用的上游模型",
+				})
+				return
+			}
+		}
+
+		apiPath := sel.Provider.APIPath
+		if apiPath == "" {
+			apiPath = "/v1/messages"
+		}
+
+		client := provider.NewAnthropicClient(provider.AnthropicConfig{
+			BaseURL:    sel.Provider.BaseURL,
+			APIKey:     sel.DecryptedKey,
+			APIPath:    apiPath,
+			BetaHeader: betaHeader,
 		})
+
+		resp, err := client.Messages(c.Request.Context(), *req)
+		latency := time.Since(startTime).Milliseconds()
+
+		if err != nil {
+			h.logger.Warn("请求 Anthropic 失败，准备重试",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+				zap.String("upstream_id", sel.Upstream.ID),
+				zap.Int("attempt", attempt))
+			_ = h.upstreamSelector.MarkUpstreamError(sel.Upstream.ID)
+			_ = h.upstreamSelector.MarkAPIKeyError(sel.ProviderKey.ID)
+			excludeUpstreams[sel.Upstream.ID] = true
+			lastErr = err
+			lastErrMsg = err.Error()
+			continue
+		}
+
+		_ = h.upstreamSelector.MarkUpstreamSuccess(sel.Upstream.ID)
+		_ = h.upstreamSelector.MarkAPIKeySuccess(sel.ProviderKey.ID)
+
+		// 记录使用日志
+		var usage openai.Usage
+		if resp.Usage != nil {
+			usage = openai.Usage{
+				PromptTokens:     resp.Usage.InputTokens,
+				CompletionTokens: resp.Usage.OutputTokens,
+				TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+			}
+		}
+		h.logUsage(c, sel, modelCfg, &usage, latency, 0, latency, "success", 200, "")
+
+		c.JSON(http.StatusOK, resp)
 		return
 	}
 
-	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
-
-	// 记录使用日志（无论是否有 usage 都记录）
-	var usage openai.Usage
-	if resp.Usage != nil {
-		usage = openai.Usage{
-			PromptTokens:     resp.Usage.InputTokens,
-			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		}
-	}
-	h.logUsage(c, selection, modelCfg, &usage, latency, 0, latency, "success", 200, "")
-
-	c.JSON(http.StatusOK, resp)
+	// 所有重试都失败
+	latency := time.Since(startTime).Milliseconds()
+	h.logger.Error("请求 Anthropic 所有重试失败",
+		zap.String("request_id", requestID),
+		zap.Int("last_status", lastStatusCode),
+		zap.String("last_error", lastErrMsg))
+	h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", lastStatusCode, lastErrMsg)
+	c.JSON(http.StatusBadGateway, gin.H{
+		"type":    "upstream_error",
+		"message": "请求上游服务失败: " + lastErrMsg,
+	})
 }
 
 // handleAnthropicStream 处理 Anthropic 流式请求
@@ -1324,6 +1382,16 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Request-ID", requestID)
+
+	// 透传上游限流相关响应头
+	for key, values := range resp.Header {
+		lowerKey := strings.ToLower(key)
+		if strings.HasPrefix(lowerKey, "anthropic-ratelimit-") || lowerKey == "retry-after" || lowerKey == "request-id" {
+			for _, v := range values {
+				c.Header(key, v)
+			}
+		}
+	}
 
 	// 流式传输
 	reader := bufio.NewReader(resp.Body)

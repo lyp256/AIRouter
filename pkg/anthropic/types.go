@@ -38,6 +38,12 @@ type SystemBlock struct {
 	CacheControl map[string]interface{} `json:"cache_control,omitempty"` // 缓存控制
 }
 
+// ThinkingConfig Extended Thinking 配置
+type ThinkingConfig struct {
+	Type         string `json:"type"`                    // enabled
+	BudgetTokens int    `json:"budget_tokens,omitempty"` // 思考 token 预算
+}
+
 // MessagesRequest Anthropic Messages API 请求
 type MessagesRequest struct {
 	Model         string                 `json:"model"`
@@ -52,6 +58,7 @@ type MessagesRequest struct {
 	Metadata      *Metadata              `json:"metadata,omitempty"`
 	Tools         []Tool                 `json:"tools,omitempty"`
 	ToolChoice    *ToolChoice            `json:"tool_choice,omitempty"`
+	Thinking      *ThinkingConfig        `json:"thinking,omitempty"` // Extended Thinking 配置
 	Extra         map[string]interface{} `json:"-"`
 }
 
@@ -67,9 +74,11 @@ type MessageContent interface{}
 // ContentBlock 内容块
 type ContentBlock struct {
 	ID        string       `json:"id,omitempty"` // tool_use 内容块的唯一标识
-	Type      string       `json:"type"`         // text, thinking, image, tool_use, tool_result
+	Type      string       `json:"type"`         // text, thinking, redacted_thinking, image, tool_use, tool_result
 	Text      string       `json:"text,omitempty"`
-	Thinking  string       `json:"thinking,omitempty"` // thinking 类型的内容
+	Thinking  string       `json:"thinking,omitempty"`  // thinking 类型的思考内容
+	Signature string       `json:"signature,omitempty"` // thinking/redacted_thinking 内容块的签名（多轮对话必须回传）
+	Data      string       `json:"data,omitempty"`      // redacted_thinking 类型的 base64 编码数据
 	Source    *ImageSource `json:"source,omitempty"`
 	ToolUseID string       `json:"tool_use_id,omitempty"`
 	Content   interface{}  `json:"content,omitempty"` // tool_result 的内容
@@ -91,9 +100,11 @@ type Metadata struct {
 
 // Tool 工具定义
 type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	InputSchema map[string]interface{} `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Type         string                 `json:"type,omitempty"` // 自定义工具默认 custom
+	Description  string                 `json:"description,omitempty"`
+	InputSchema  map[string]interface{} `json:"input_schema"`
+	CacheControl map[string]interface{} `json:"cache_control,omitempty"` // 缓存控制
 }
 
 // ToolChoice 工具选择
@@ -109,7 +120,7 @@ type MessagesResponse struct {
 	Role         string                 `json:"role"` // assistant
 	Content      []ContentBlock         `json:"content"`
 	Model        string                 `json:"model"`
-	StopReason   string                 `json:"stop_reason,omitempty"` // end_turn, max_tokens, stop_sequence, tool_use
+	StopReason   string                 `json:"stop_reason,omitempty"` // end_turn, max_tokens, stop_sequence, tool_use, pause_turn, refusal
 	StopSequence string                 `json:"stop_sequence,omitempty"`
 	Usage        *Usage                 `json:"usage"`
 	Error        *ErrorResponse         `json:"error,omitempty"`
@@ -118,8 +129,10 @@ type MessagesResponse struct {
 
 // Usage 使用量
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"` // 缓存创建消耗的 token
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`     // 缓存命中节省的 token
 }
 
 // ErrorResponse 错误响应
@@ -140,9 +153,10 @@ type StreamEvent struct {
 
 // StreamDelta 流式增量
 type StreamDelta struct {
-	Type        string `json:"type"` // text_delta, thinking_delta, input_json_delta
+	Type        string `json:"type"` // text_delta, thinking_delta, input_json_delta, signature_delta
 	Text        string `json:"text,omitempty"`
-	Thinking    string `json:"thinking,omitempty"` // thinking_delta 类型的内容
+	Thinking    string `json:"thinking,omitempty"`  // thinking_delta 类型的思考内容
+	Signature   string `json:"signature,omitempty"` // signature_delta 类型的签名增量
 	StopReason  string `json:"stop_reason,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
 }

@@ -21,6 +21,7 @@ type AnthropicClient struct {
 	apiKey     string
 	version    string // API 版本
 	apiPath    string // API 路径，默认 /v1/messages
+	betaHeader string // anthropic-beta 头（透传客户端的 beta 功能标记）
 }
 
 // AnthropicConfig Anthropic 客户端配置
@@ -31,6 +32,7 @@ type AnthropicConfig struct {
 	HTTPClient *http.Client
 	Version    string // API 版本，默认 2023-06-01
 	APIPath    string // API 路径，默认 /v1/messages
+	BetaHeader string // anthropic-beta 头（透传客户端的 beta 功能标记）
 }
 
 // NewAnthropicClient 创建 Anthropic 客户端
@@ -68,6 +70,7 @@ func NewAnthropicClient(cfg AnthropicConfig) *AnthropicClient {
 		apiKey:     cfg.APIKey,
 		version:    version,
 		apiPath:    apiPath,
+		betaHeader: cfg.BetaHeader,
 	}
 }
 
@@ -141,6 +144,9 @@ func (c *AnthropicClient) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", c.version)
+	if c.betaHeader != "" {
+		req.Header.Set("anthropic-beta", c.betaHeader)
+	}
 }
 
 // ParseStreamEvent 解析流式事件
