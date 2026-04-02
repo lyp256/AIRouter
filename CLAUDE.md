@@ -20,7 +20,7 @@ make web-build    # 构建前端生产版本
 
 - `internal/api/handler/` - 请求处理器
 - `internal/api/middleware/` - 中间件（JWT、API Key、限流、日志、权限）
-- `internal/service/` - 业务服务（upstream_selector、retry、quota、health、metrics）
+- `internal/service/` - 业务服务（upstream_selector、retry、quota、upstream_health、metrics）
 - `internal/provider/` - 供应商客户端（OpenAI 兼容、Anthropic 原生）
 - `pkg/openai/types.go` - OpenAI 协议类型（支持 `reasoning_content`）
 - `pkg/anthropic/types.go` - Anthropic 协议类型（支持 `thinking` 内容块和 `thinking_delta` 增量）
@@ -47,6 +47,8 @@ make web-build    # 构建前端生产版本
 
 **Upstream（上游模型）**: model_id, provider_id, provider_key_id, provider_model, weight, priority, enabled
 - 上游模型的供应商类型必须与所属模型的 `provider_type` 匹配
+- 健康状态（active/error）存储在缓存中，不写入数据库
+- 缓存 key: `upstream:health:{upstreamID}`，TTL 1 小时，缓存未命中视为健康
 
 **UserKey（用户密钥）**: user_id, key（加密）, rate_limit, quota_limit, status
 
@@ -71,7 +73,11 @@ make web-build    # 构建前端生产版本
 ## 开发规范
 
 - API Key 存储使用 AES-GCM 加密
-- 上游模型选择支持权重和优先级
+- 上游模型选择支持权重和优先级，健康状态过滤通过缓存判断
+- 上游健康检查服务（`internal/service/upstream_health.go`）支持两级检查：
+  - 全量检查（默认 5 分钟）：检查所有启用的上游
+  - 恢复检查（默认 30 秒）：仅检查不健康的上游以快速恢复
+- 分布式选主通过缓存 `leader:health-check:full` 和 `leader:health-check:recovery` key 实现，Redis 模式下只有一个实例执行检查
 - 流式请求使用 SSE 协议
 - Anthropic 请求使用原生 API 处理
 - 使用中文注释和中文界面

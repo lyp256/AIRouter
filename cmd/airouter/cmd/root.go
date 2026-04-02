@@ -124,6 +124,14 @@ func runServe(cmd *cobra.Command, args []string) {
 	// 初始化上游模型选择器
 	upstreamSelector := service.NewUpstreamSelector(db, encryptor, cacheInstance)
 
+	// 初始化健康检查服务
+	var healthCheckSvc *service.UpstreamHealthCheckService
+	if cfg.HealthCheck.Enabled {
+		healthCheckSvc = service.NewUpstreamHealthCheckService(
+			db, encryptor, cacheInstance, &cfg.HealthCheck, logger,
+		)
+	}
+
 	// 创建处理器
 	handlers := &router.Handlers{
 		Auth:     handler.NewAuthHandler(db, middleware.JWTConfig{Secret: cfg.Security.JWTSecret, Expire: cfg.Security.JWTExpire}),
@@ -154,12 +162,26 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	logger.Info("AIRouter 启动成功", zap.String("addr", addr))
 
+	// 启动健康检查服务
+	healthCtx, healthCancel := context.WithCancel(context.Background())
+	defer healthCancel()
+	if healthCheckSvc != nil {
+		go healthCheckSvc.Start(healthCtx)
+		logger.Info("健康检查服务已启动")
+	}
+
 	// 优雅关闭
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	logger.Info("正在关闭服务...")
+
+	// 停止健康检查服务
+	healthCancel()
+	if healthCheckSvc != nil {
+		healthCheckSvc.Stop()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -8,14 +8,15 @@ import (
 
 // Config 应用配置
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Security  SecurityConfig  `mapstructure:"security"`
-	Logging   LoggingConfig   `mapstructure:"logging"`
-	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
-	Retry     RetryConfig     `mapstructure:"retry"`
-	Admin     AdminConfig     `mapstructure:"admin"`
-	Cache     CacheConfig     `mapstructure:"cache"`
+	Server      ServerConfig      `mapstructure:"server"`
+	Database    DatabaseConfig    `mapstructure:"database"`
+	Security    SecurityConfig    `mapstructure:"security"`
+	Logging     LoggingConfig     `mapstructure:"logging"`
+	RateLimit   RateLimitConfig   `mapstructure:"rate_limit"`
+	Retry       RetryConfig       `mapstructure:"retry"`
+	Admin       AdminConfig       `mapstructure:"admin"`
+	Cache       CacheConfig       `mapstructure:"cache"`
+	HealthCheck HealthCheckConfig `mapstructure:"health_check"`
 }
 
 // ServerConfig 服务器配置
@@ -88,6 +89,18 @@ type RedisConfig struct {
 	DB       int    `mapstructure:"db"`
 }
 
+// HealthCheckConfig 健康检查配置
+type HealthCheckConfig struct {
+	Enabled             bool          `mapstructure:"enabled"`
+	FullCheckInterval   time.Duration `mapstructure:"full_check_interval"`
+	RecoveryInterval    time.Duration `mapstructure:"recovery_interval"`
+	Timeout             time.Duration `mapstructure:"timeout"`
+	HealthyThreshold    int           `mapstructure:"healthy_threshold"`
+	UnhealthyThreshold  int           `mapstructure:"unhealthy_threshold"`
+	LeaderLease         time.Duration `mapstructure:"leader_lease"`
+	LeaderRenewInterval time.Duration `mapstructure:"leader_renew_interval"`
+}
+
 // Load 加载配置，configPath 为配置文件路径，为空则使用默认路径
 func Load(configPath string) (*Config, error) {
 	if configPath != "" {
@@ -119,6 +132,14 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("cache.type", "memory")
 	viper.SetDefault("cache.ttl", "10m")
 	viper.SetDefault("cache.size", 64)
+	viper.SetDefault("health_check.enabled", true)
+	viper.SetDefault("health_check.full_check_interval", "5m")
+	viper.SetDefault("health_check.recovery_interval", "30s")
+	viper.SetDefault("health_check.timeout", "10s")
+	viper.SetDefault("health_check.healthy_threshold", 2)
+	viper.SetDefault("health_check.unhealthy_threshold", 3)
+	viper.SetDefault("health_check.leader_lease", "30s")
+	viper.SetDefault("health_check.leader_renew_interval", "10s")
 
 	// 支持环境变量
 	viper.AutomaticEnv()

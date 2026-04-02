@@ -45,6 +45,49 @@ func newMemoryCache(cfg *config.CacheConfig) (*memoryCache, error) {
 	}, nil
 }
 
+func (m *memoryCache) SetNX(_ context.Context, key string, value interface{}, ttl time.Duration) (bool, error) {
+	if ttl == 0 {
+		ttl = m.ttl
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 检查 key 是否已存在且未过期
+	data, ok := m.client.Get([]byte(key))
+	if ok {
+		var entry cacheEntry
+		if err := json.Unmarshal(data, &entry); err == nil {
+			if time.Now().Before(entry.ExpireAt) {
+				return false, nil // key 已存在，设置失败
+			}
+		}
+		m.client.Del([]byte(key))
+	}
+
+	// key 不存在或已过期，设置值
+	valData, err := json.Marshal(value)
+	if err != nil {
+		return false, fmt.Errorf("缓存序列化失败: %w", err)
+	}
+
+	entry := cacheEntry{
+		Data:     valData,
+		ExpireAt: time.Now().Add(ttl),
+	}
+	entryData, err := json.Marshal(entry)
+	if err != nil {
+		return false, fmt.Errorf("缓存序列化失败: %w", err)
+	}
+
+	m.client.Set([]byte(key), entryData)
+	return true, nil
+}
+
+func (m *memoryCache) IsDistributed() bool {
+	return false
+}
+
 func (m *memoryCache) Get(_ context.Context, key string, value interface{}) error {
 	data, ok := m.client.Get([]byte(key))
 	if !ok {
