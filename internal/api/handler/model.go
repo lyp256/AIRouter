@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/lyp256/airouter/internal/cache"
 	"github.com/lyp256/airouter/internal/model"
 	"github.com/lyp256/airouter/internal/provider"
 	"github.com/lyp256/airouter/internal/service"
@@ -23,11 +25,12 @@ import (
 type ModelHandler struct {
 	db               *gorm.DB
 	upstreamSelector *service.UpstreamSelector
+	cache            cache.Cache
 }
 
 // NewModelHandler 创建模型处理器
-func NewModelHandler(db *gorm.DB, upstreamSelector *service.UpstreamSelector) *ModelHandler {
-	return &ModelHandler{db: db, upstreamSelector: upstreamSelector}
+func NewModelHandler(db *gorm.DB, upstreamSelector *service.UpstreamSelector, c cache.Cache) *ModelHandler {
+	return &ModelHandler{db: db, upstreamSelector: upstreamSelector, cache: c}
 }
 
 // ModelWithUpstreams 模型及其上游模型
@@ -151,6 +154,9 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 		return
 	}
 
+	// 清除模型列表缓存
+	h.invalidateModelListCache()
+
 	c.JSON(http.StatusCreated, gin.H{"data": m})
 }
 
@@ -208,6 +214,10 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 		return
 	}
 
+	// 清除模型缓存
+	h.invalidateModelCache(m.Name)
+	h.invalidateModelListCache()
+
 	h.db.First(&m, "id = ?", id)
 	c.JSON(http.StatusOK, gin.H{"data": m})
 }
@@ -215,6 +225,13 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 // DeleteModel 删除模型
 func (h *ModelHandler) DeleteModel(c *gin.Context) {
 	id := c.Param("id")
+
+	// 先查询模型名称，用于清除缓存
+	var existingModel model.Model
+	if err := h.db.First(&existingModel, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "模型不存在"})
+		return
+	}
 
 	// 开启事务
 	tx := h.db.Begin()
@@ -246,6 +263,11 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 	}
 
 	tx.Commit()
+
+	// 清除缓存
+	h.invalidateModelCache(existingModel.Name)
+	h.invalidateModelListCache()
+
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
@@ -266,6 +288,10 @@ func (h *ModelHandler) ToggleModel(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
 		return
 	}
+
+	// 清除模型缓存
+	h.invalidateModelCache(m.Name)
+	h.invalidateModelListCache()
 
 	c.JSON(http.StatusOK, gin.H{"data": m})
 }
@@ -866,4 +892,30 @@ func (h *ModelHandler) TestModelUpstreams(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": results})
+}
+
+// ========== 缓存清理辅助方法 ==========
+
+// invalidateModelCache 清除指定模型的缓存
+func (h *ModelHandler) invalidateModelCache(name string) {
+	if h.cache == nil {
+		return
+	}
+	ctx := context.Background()
+	for _, types := range [][]string{
+		{"openai", "openai_compatible"},
+		{"openai"},
+		{"anthropic"},
+	} {
+		_ = h.cache.Delete(ctx, fmt.Sprintf("model:name:%s:type:%v", name, types))
+	}
+}
+
+// invalidateModelListCache 清除模型列表缓存
+func (h *ModelHandler) invalidateModelListCache() {
+	if h.cache == nil {
+		return
+	}
+	ctx := context.Background()
+	_ = h.cache.Delete(ctx, "models:enabled")
 }

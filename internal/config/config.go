@@ -15,6 +15,7 @@ type Config struct {
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 	Retry     RetryConfig     `mapstructure:"retry"`
 	Admin     AdminConfig     `mapstructure:"admin"`
+	Cache     CacheConfig     `mapstructure:"cache"`
 }
 
 // ServerConfig 服务器配置
@@ -71,6 +72,22 @@ type AdminConfig struct {
 	Email    string `mapstructure:"email"`
 }
 
+// CacheConfig 缓存配置
+type CacheConfig struct {
+	Enabled bool          `mapstructure:"enabled"`
+	Type    string        `mapstructure:"type"` // "redis" 或 "memory"
+	TTL     time.Duration `mapstructure:"ttl"`
+	Redis   RedisConfig   `mapstructure:"redis"`
+	Size    int           `mapstructure:"size"` // 内存缓存大小（MB）
+}
+
+// RedisConfig Redis 连接配置
+type RedisConfig struct {
+	Addr     string `mapstructure:"addr"`
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
+}
+
 // Load 加载配置，configPath 为配置文件路径，为空则使用默认路径
 func Load(configPath string) (*Config, error) {
 	if configPath != "" {
@@ -98,6 +115,10 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("retry.multiplier", 2.0)
 	viper.SetDefault("retry.retry_on_codes", []int{429, 500, 502, 503, 504})
 	viper.SetDefault("security.jwt_expire", "24h")
+	viper.SetDefault("cache.enabled", true)
+	viper.SetDefault("cache.type", "memory")
+	viper.SetDefault("cache.ttl", "10m")
+	viper.SetDefault("cache.size", 64)
 
 	// 支持环境变量
 	viper.AutomaticEnv()

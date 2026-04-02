@@ -1,0 +1,190 @@
+package cache
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"sync"
+	"time"
+
+	"github.com/lyp256/airouter/internal/config"
+	"github.com/qianbin/directcache"
+)
+
+// cacheEntry 带过期时间的缓存条目
+type cacheEntry struct {
+	Data     []byte    `json:"d"`
+	ExpireAt time.Time `json:"e"`
+}
+
+// memoryCache 基于 directcache 的内存缓存实现（带 TTL 支持）
+type memoryCache struct {
+	client *directcache.Cache
+	ttl    time.Duration
+	mu     sync.Mutex
+}
+
+func newMemoryCache(cfg *config.CacheConfig) (*memoryCache, error) {
+	size := cfg.Size
+	if size <= 0 {
+		size = 64
+	}
+
+	ttl := cfg.TTL
+	if ttl == 0 {
+		ttl = 10 * time.Minute
+	}
+
+	client := directcache.New(size * 1024 * 1024)
+
+	return &memoryCache{
+		client: client,
+		ttl:    ttl,
+	}, nil
+}
+
+func (m *memoryCache) Get(_ context.Context, key string, value interface{}) error {
+	data, ok := m.client.Get([]byte(key))
+	if !ok {
+		return ErrCacheMiss
+	}
+
+	var entry cacheEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return ErrCacheMiss
+	}
+
+	// 检查过期
+	if time.Now().After(entry.ExpireAt) {
+		m.client.Del([]byte(key))
+		return ErrCacheMiss
+	}
+
+	return json.Unmarshal(entry.Data, value)
+}
+
+func (m *memoryCache) Set(_ context.Context, key string, value interface{}, ttl time.Duration) error {
+	if ttl == 0 {
+		ttl = m.ttl
+	}
+
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("缓存序列化失败: %w", err)
+	}
+
+	entry := cacheEntry{
+		Data:     data,
+		ExpireAt: time.Now().Add(ttl),
+	}
+
+	entryData, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("缓存序列化失败: %w", err)
+	}
+
+	m.client.Set([]byte(key), entryData)
+	return nil
+}
+
+func (m *memoryCache) Delete(_ context.Context, key string) error {
+	m.client.Del([]byte(key))
+	return nil
+}
+
+func (m *memoryCache) Once(_ context.Context, key string, value interface{}, ttl time.Duration, do func() (interface{}, error)) error {
+	if ttl == 0 {
+		ttl = m.ttl
+	}
+
+	// 先尝试从缓存获取
+	data, ok := m.client.Get([]byte(key))
+	if ok {
+		var entry cacheEntry
+		if err := json.Unmarshal(data, &entry); err == nil {
+			// 检查过期
+			if time.Now().Before(entry.ExpireAt) {
+				if err := json.Unmarshal(entry.Data, value); err == nil {
+					return nil
+				}
+			}
+		}
+		// 缓存数据损坏或已过期，删除
+		m.client.Del([]byte(key))
+	}
+
+	// 使用互斥锁防止缓存击穿（同一个 key 只允许一个请求加载）
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 双重检查：获取锁后再查一次缓存
+	data, ok = m.client.Get([]byte(key))
+	if ok {
+		var entry cacheEntry
+		if err := json.Unmarshal(data, &entry); err == nil {
+			if time.Now().Before(entry.ExpireAt) {
+				if err := json.Unmarshal(entry.Data, value); err == nil {
+					return nil
+				}
+			}
+		}
+		m.client.Del([]byte(key))
+	}
+
+	// 缓存未命中，执行加载函数
+	result, err := do()
+	if err != nil {
+		return err
+	}
+
+	// 序列化并缓存
+	resultData, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("缓存序列化失败: %w", err)
+	}
+
+	entry := cacheEntry{
+		Data:     resultData,
+		ExpireAt: time.Now().Add(ttl),
+	}
+	entryData, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("缓存序列化失败: %w", err)
+	}
+	m.client.Set([]byte(key), entryData)
+
+	// 将结果赋值给 value
+	return assignValue(value, result)
+}
+
+// assignValue 将 src 的值赋给 dst（dst 必须是指针）
+func assignValue(dst, src interface{}) error {
+	if src == nil {
+		return errors.New("缓存值为 nil")
+	}
+
+	dstVal := reflect.ValueOf(dst)
+	if dstVal.Kind() != reflect.Ptr {
+		return errors.New("目标值必须是指针")
+	}
+
+	srcVal := reflect.ValueOf(src)
+
+	// 如果 src 是指针，获取其指向的值
+	if srcVal.Kind() == reflect.Ptr {
+		srcVal = srcVal.Elem()
+	}
+
+	// 如果 dst 指向指针，需要处理
+	if dstVal.Elem().Kind() == reflect.Ptr {
+		newVal := reflect.New(srcVal.Type())
+		newVal.Elem().Set(srcVal)
+		dstVal.Elem().Set(newVal)
+		return nil
+	}
+
+	dstVal.Elem().Set(srcVal)
+	return nil
+}
