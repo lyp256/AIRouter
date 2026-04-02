@@ -2,10 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 项目概述
-
-AIRouter 是一个大模型 API 统一代理系统，提供多供应商统一代理、密钥管理、负载均衡和使用统计。
-
 ## 常用命令
 
 ```bash
@@ -20,32 +16,8 @@ make web-install  # 安装前端依赖
 make web-build    # 构建前端生产版本
 ```
 
+## 核心模块
 
-
-## 架构概览
-
-### 端口与路由
-- **端口 8080**: 统一服务端口
-  - `/v1/*` - 对外 API（支持 API Key 或 JWT+KeyID 认证）
-  - `/api/admin/*` - 管理 API（JWT 认证）
-  - `/health` - 健康检查（无需认证）
-
-### API 协议
-- `/v1/chat/completions` - OpenAI Chat Completions API
-- `/v1/messages` - Anthropic Messages API
-- `/v1/embeddings` - Embeddings API
-- `/v1/models` - 模型列表
-
-### 管理 API
-- `/api/admin/auth/*` - 认证（登录、登出、获取当前用户）
-- `/api/admin/providers` - 供应商管理（仅管理员）
-- `/api/admin/models` - 模型管理（仅管理员）
-- `/api/admin/upstreams` - 上游模型管理（仅管理员）
-- `/api/admin/users` - 用户管理（仅管理员）
-- `/api/admin/user-keys` - 用户密钥管理（混合权限）
-- `/api/admin/stats/*` - 统计分析（仅管理员）
-
-### 核心模块
 - `internal/api/handler/` - 请求处理器
 - `internal/api/middleware/` - 中间件（JWT、API Key、限流、日志、权限）
 - `internal/service/` - 业务服务（upstream_selector、retry、quota、health、metrics）
@@ -53,7 +25,8 @@ make web-build    # 构建前端生产版本
 - `pkg/openai/types.go` - OpenAI 协议类型（支持 `reasoning_content`）
 - `pkg/anthropic/types.go` - Anthropic 协议类型（支持 `thinking` 内容块和 `thinking_delta` 增量）
 
-### 前端模块
+## 前端模块
+
 - `web/src/api/types.ts` - 全局类型定义（User、Model、FilterOptions 等）
 - `web/src/api/chat.ts` - 聊天 API + 会话管理（sessionStorage 存储）
 - `web/src/api/model.ts` - 模型管理（`list()` 调用 `/v1/models`，`adminList()` 调用 `/api/admin/models`）
@@ -61,7 +34,7 @@ make web-build    # 构建前端生产版本
 - `web/src/stores/chat.ts` - 聊天 Pinia Store（后台会话状态、流式内容管理）
 - `web/src/utils/format.ts` - BU 单位格式化工具（`formatBU`、`formatPricePerM`、`storageToDisplay`、`displayToStorage`）
 
-### 数据模型
+## 数据模型概要
 
 **Provider（供应商）**: name, type, base_url, api_path, enabled
 
@@ -79,12 +52,10 @@ make web-build    # 构建前端生产版本
 
 **UsageLog（使用日志）**: user_id, user_key_id, upstream_id, provider_key_id, model, input_tokens, output_tokens, cost, latency, status
 - 使用 ID 关联外部数据，通过 JOIN 查询获取完整信息
-- `upstream_id` 关联上游模型，可获取 provider_model、model_id、provider_id
-- 查询时通过 JOIN 获取 username、provider_type、provider_name 等关联字段
 
 **关系**: Provider 1:N ProviderKey, Upstream 1:1 ProviderKey, Upstream N:1 Provider, Model 1:N Upstream
 
-### BU 计量单位
+## BU 计量单位
 
 系统使用抽象计量单位 BU（Basic Unit），统一表示价格、配额和费用：
 
@@ -96,16 +67,6 @@ make web-build    # 构建前端生产版本
 - **换算**: 存储 × 10^6 = 显示值（纳 BU/K → BU/M）
 
 工具包: `pkg/bu/bu.go` 提供单位转换函数。
-
-## 配置
-
-配置文件: `configs/config.yaml`
-
-关键配置:
-- `security.encryption_key` - 32字节 AES 加密密钥
-- `security.jwt_secret` - JWT 签名密钥
-- `retry` - 重试配置
-- `admin` - 初始管理员账户
 
 ## 开发规范
 
@@ -119,4 +80,4 @@ make web-build    # 构建前端生产版本
 - ChatMessage 支持 `reasoning_content` 字段（推理模型思考过程）
 - Anthropic 协议支持 `thinking` 内容块和 `thinking_delta` 增量（Claude Extended Thinking）
 - 对外 API 支持混合认证：API Key 或 JWT+KeyID（用于管理后台聊天）
-- 提交代码前需要使用 `make check ` 检查，检查通过后才可以提交，编写的 golang 代码必须需要符合 golangci-lint 的规范
+- 提交代码前需要使用 `make check` 检查，检查通过后才可以提交，编写的 golang 代码必须符合 golangci-lint 的规范
