@@ -138,10 +138,14 @@ func (s *UpstreamSelector) getUpstreams(modelID string) []*model.Upstream {
 
 // selectByWeight 根据权重选择上游模型
 func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream) *model.Upstream {
-	// 过滤出活跃状态的上游模型
+	// 过滤出活跃状态的上游模型（从缓存检查健康状态）
 	activeUpstreams := make([]*model.Upstream, 0, len(upstreams))
 	for _, u := range upstreams {
-		if u.Status == "active" && u.Enabled {
+		if !u.Enabled {
+			continue
+		}
+		// 从缓存检查健康状态（缓存未命中 = 健康）
+		if s.isUpstreamHealthy(u.ID) {
 			activeUpstreams = append(activeUpstreams, u)
 		}
 	}
@@ -186,28 +190,50 @@ func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream) *model.Up
 	return priorityUpstreams[0]
 }
 
-// MarkUpstreamError 标记上游模型错误
-func (s *UpstreamSelector) MarkUpstreamError(upstreamID string) error {
-	err := s.db.Model(&model.Upstream{}).
-		Where("id = ?", upstreamID).
-		Updates(map[string]interface{}{
-			"status": "error",
-		}).Error
-	if err != nil {
-		return err
+// isUpstreamHealthy 从缓存检查上游是否健康
+func (s *UpstreamSelector) isUpstreamHealthy(upstreamID string) bool {
+	health := GetUpstreamHealthFromCache(s.cache, upstreamID)
+	if health == nil {
+		return true // 缓存未命中，默认健康
 	}
-	// 清除所有相关的上游缓存（无法从 upstreamID 反查 modelID，清除全部）
-	s.InvalidateAllCache()
-	return nil
+	return health.Status == "active"
 }
 
-// MarkUpstreamSuccess 标记上游模型成功
+// MarkUpstreamError 标记上游模型错误（写入缓存）
+func (s *UpstreamSelector) MarkUpstreamError(upstreamID string) error {
+	// 读取已有健康状态以保留连续计数
+	health := GetUpstreamHealthFromCache(s.cache, upstreamID)
+	if health == nil {
+		health = &UpstreamHealthStatus{
+			UpstreamID: upstreamID,
+			Status:     "active",
+		}
+	}
+
+	health.UpstreamID = upstreamID
+	health.ConsecFail++
+	health.ConsecSuccess = 0
+	health.Status = "error"
+	health.LastErrorTime = time.Now()
+
+	return SetUpstreamHealthToCache(s.cache, upstreamID, health)
+}
+
+// MarkUpstreamSuccess 标记上游模型成功（写入缓存）
 func (s *UpstreamSelector) MarkUpstreamSuccess(upstreamID string) error {
-	return s.db.Model(&model.Upstream{}).
-		Where("id = ?", upstreamID).
-		Updates(map[string]interface{}{
-			"status": "active",
-		}).Error
+	health := GetUpstreamHealthFromCache(s.cache, upstreamID)
+	if health == nil {
+		// 无健康记录说明一直健康，无需操作
+		return nil
+	}
+
+	// 有记录（当前为 error 状态），成功请求直接恢复
+	health.ConsecSuccess++
+	health.ConsecFail = 0
+	health.Status = "active"
+	health.LastCheckTime = time.Now()
+
+	return SetUpstreamHealthToCache(s.cache, upstreamID, health)
 }
 
 // MarkAPIKeyError 标记供应商密钥错误

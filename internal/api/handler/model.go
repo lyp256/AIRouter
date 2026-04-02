@@ -42,9 +42,11 @@ type ModelWithUpstreams struct {
 // UpstreamDetail 上游模型详情
 type UpstreamDetail struct {
 	model.Upstream
-	ProviderName    string `json:"provider_name"`
-	ProviderType    string `json:"provider_type"` // 供应商类型：openai, anthropic, openai_compatible
-	ProviderKeyName string `json:"provider_key_name"`
+	ProviderName    string     `json:"provider_name"`
+	ProviderType    string     `json:"provider_type"` // 供应商类型：openai, anthropic, openai_compatible
+	ProviderKeyName string     `json:"provider_key_name"`
+	LastCheckTime   *time.Time `json:"last_check_time,omitempty"` // 最后检查时间（来自缓存）
+	LastError       string     `json:"last_error,omitempty"`      // 最后错误信息（来自缓存）
 }
 
 // ListModels 列出模型
@@ -322,6 +324,7 @@ func (h *ModelHandler) ListUpstreams(c *gin.Context) {
 			detail.ProviderKeyName = apiKey.Name
 		}
 
+		h.enrichUpstreamWithHealth(c.Request.Context(), &detail)
 		details = append(details, detail)
 	}
 
@@ -351,6 +354,7 @@ func (h *ModelHandler) GetUpstream(c *gin.Context) {
 		detail.ProviderKeyName = apiKey.Name
 	}
 
+	h.enrichUpstreamWithHealth(c.Request.Context(), &detail)
 	c.JSON(http.StatusOK, gin.H{"data": detail})
 }
 
@@ -387,6 +391,7 @@ func (h *ModelHandler) ListModelUpstreams(c *gin.Context) {
 			detail.ProviderKeyName = apiKey.Name
 		}
 
+		h.enrichUpstreamWithHealth(c.Request.Context(), &detail)
 		details = append(details, detail)
 	}
 
@@ -604,19 +609,36 @@ func (h *ModelHandler) ResetUpstreamStatus(c *gin.Context) {
 		return
 	}
 
-	if err := h.db.Model(&u).Updates(map[string]interface{}{
-		"status":     "active",
-		"updated_at": time.Now(),
-	}).Error; err != nil {
+	// 将缓存中的健康状态重置为 active
+	health := &service.UpstreamHealthStatus{
+		UpstreamID:    id,
+		Status:        "active",
+		LastCheckTime: time.Now(),
+	}
+	if err := service.SetUpstreamHealthToCache(h.cache, id, health); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "重置失败"})
 		return
 	}
 
-	// 清除选择器缓存，确保下次请求能选到该上游
-	h.upstreamSelector.InvalidateCache(u.ModelID)
+	// 同时更新数据库状态以保持一致
+	_ = h.db.Model(&u).Updates(map[string]interface{}{
+		"status":     "active",
+		"updated_at": time.Now(),
+	}).Error
 
-	h.db.First(&u, "id = ?", id)
+	u.Status = "active"
 	c.JSON(http.StatusOK, gin.H{"data": u})
+}
+
+// enrichUpstreamWithHealth 从缓存拼接上游健康状态到详情
+func (h *ModelHandler) enrichUpstreamWithHealth(ctx context.Context, detail *UpstreamDetail) {
+	health := service.GetUpstreamHealthFromCache(h.cache, detail.ID)
+	if health != nil {
+		detail.Status = health.Status
+		detail.LastCheckTime = &health.LastCheckTime
+		detail.LastError = health.LastError
+	}
+	// 缓存未命中时保留数据库默认值（"active"）
 }
 
 // testUpstreamResult 测试单个上游模型的结果

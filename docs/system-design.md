@@ -269,7 +269,7 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | `ProviderModel` | string | 供应商实际模型名 |
 | `Weight` | int | 权重（负载均衡用） |
 | `Priority` | int | 优先级 |
-| `Status` | string | 状态：active, disabled, error |
+| `Status` | string | 状态：active, disabled, error（运行时状态存储在缓存中，数据库仅保留初始值） |
 | `Enabled` | bool | 是否启用 |
 | `CreatedAt` | time.Time | 创建时间 |
 | `UpdatedAt` | time.Time | 更新时间 |
@@ -438,7 +438,7 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 |------|------|------|
 | Web 框架 | Gin | 高性能、轻量 |
 | 数据库 | SQLite (默认) / PostgreSQL | SQLite 便于开发，PG 支持生产 |
-| 缓存 | 内存缓存 (可选 Redis) | Key 状态缓存 |
+| 缓存 | 内存缓存 (可选 Redis) | 上游健康状态、模型配置缓存、分布式选主 |
 | 配置 | Viper | 支持多种配置格式 |
 | 日志 | Zap | 结构化日志 |
 | HTTP 客户端 | Resty | 供应商 API 调用 |
@@ -473,9 +473,9 @@ airouter/
 │   ├── store/sqlite/sqlite.go     # SQLite 存储
 │   ├── service/                   # 核心服务
 │   │   ├── upstream_selector.go   # 上游模型选择器
+│   │   ├── upstream_health.go     # 上游健康检查（两级检查 + 分布式选主）
 │   │   ├── retry.go               # 重试服务
 │   │   ├── quota.go               # 配额管理
-│   │   ├── health.go              # 健康检查
 │   │   └── metrics.go             # Prometheus 指标
 │   ├── provider/                  # 供应商适配器
 │   │   ├── client.go              # OpenAI 兼容客户端
@@ -572,10 +572,21 @@ web/
 - 供应商密钥配额限制
 - 配额检查和告警
 
-### 7.4 健康检查 (health.go)
+### 7.4 上游健康检查 (upstream_health.go)
 
-- 供应商健康状态检测
-- 定期检测供应商可用性
+- 健康状态存储在缓存中（key: `upstream:health:{upstreamID}`），不写入数据库
+- 缓存未命中视为健康（默认 active）
+- 两级检查机制：
+  - **全量检查**（默认 5 分钟间隔）：检查所有启用的上游模型
+  - **恢复检查**（默认 30 秒间隔）：仅检查不健康的上游模型以快速恢复
+- 按 `(providerID, providerKeyID)` 去重，减少重复探测
+- 探测方式：向供应商 `/v1/models` 端点发送 GET 请求，HTTP 429 不算不健康
+- 连续成功/失败次数达到阈值后转换状态
+- 分布式选主：通过缓存 `leader:health-check:full` 和 `leader:health-check:recovery` key 实现
+  - Redis 缓存模式下只有一个实例执行健康检查
+  - 内存缓存模式下各实例独立运行
+- 代理请求失败时即时标记上游为不健康（写入缓存）
+- 代理请求成功时即时恢复健康状态
 
 ### 7.5 Prometheus 指标 (metrics.go)
 
@@ -716,6 +727,16 @@ admin:
   username: "admin"
   password: "changeme"
   email: "admin@example.com"
+
+health_check:
+  enabled: true
+  full_check_interval: "5m"     # 全量检查间隔
+  recovery_interval: "30s"      # 不健康上游恢复检查间隔
+  timeout: "10s"                # 探测超时
+  healthy_threshold: 2          # 连续成功次数阈值
+  unhealthy_threshold: 3        # 连续失败次数阈值
+  leader_lease: "30s"           # 选主租约时长
+  leader_renew_interval: "10s"  # 选主续约间隔
 ```
 
 ---

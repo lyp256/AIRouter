@@ -22,6 +22,10 @@ type Cache interface {
 	Delete(ctx context.Context, key string) error
 	// Once 单飞：缓存未命中时执行 do 函数并缓存结果
 	Once(ctx context.Context, key string, value interface{}, ttl time.Duration, do func() (interface{}, error)) error
+	// SetNX 仅当 key 不存在时设置值，返回是否设置成功（用于分布式选主）
+	SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) (bool, error)
+	// IsDistributed 返回是否为分布式缓存（Redis=true，内存=false）
+	IsDistributed() bool
 }
 
 // New 根据配置创建缓存实例
@@ -64,4 +68,12 @@ func (n *nopCache) Once(_ context.Context, _ string, value interface{}, _ time.D
 	// 将结果赋值给 value（value 必须是指针）
 	// nopCache 场景下直接通过反射赋值
 	return assignValue(value, v)
+}
+
+func (n *nopCache) SetNX(_ context.Context, _ string, _ interface{}, _ time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (n *nopCache) IsDistributed() bool {
+	return false
 }

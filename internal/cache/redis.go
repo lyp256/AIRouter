@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 // redisCache 基于 go-redis/cache/v9 的 Redis 缓存实现
 type redisCache struct {
 	client *gorediscache.Cache
+	rdb    *redis.Client
 	ttl    time.Duration
 }
 
@@ -41,6 +43,7 @@ func newRedisCache(cfg *config.CacheConfig) (*redisCache, error) {
 
 	return &redisCache{
 		client: client,
+		rdb:    rdb,
 		ttl:    ttl,
 	}, nil
 }
@@ -85,4 +88,29 @@ func (r *redisCache) Once(ctx context.Context, key string, value interface{}, tt
 			return do()
 		},
 	})
+}
+
+func (r *redisCache) SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) (bool, error) {
+	if ttl == 0 {
+		ttl = r.ttl
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return false, fmt.Errorf("缓存序列化失败: %w", err)
+	}
+	result, err := r.rdb.SetArgs(ctx, key, data, redis.SetArgs{
+		Mode: "NX",
+		TTL:  ttl,
+	}).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return false, nil // key 已存在，设置失败
+		}
+		return false, err
+	}
+	return result == "OK", nil
+}
+
+func (r *redisCache) IsDistributed() bool {
+	return true
 }
