@@ -630,7 +630,6 @@ func (h *ModelHandler) enrichUpstreamWithHealth(ctx context.Context, detail *Ups
 	if health != nil {
 		detail.Status = health.Status
 		detail.LastCheckTime = &health.LastCheckTime
-		detail.LastError = health.LastError
 	}
 	// 缓存未命中时保留数据库默认值（"active"）
 }

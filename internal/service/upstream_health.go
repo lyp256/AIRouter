@@ -32,7 +32,6 @@ type UpstreamHealthStatus struct {
 	Status        string    `json:"status"` // "active" / "error"
 	LastCheckTime time.Time `json:"last_check_time"`
 	LastErrorTime time.Time `json:"last_error_time,omitempty"`
-	LastError     string    `json:"last_error,omitempty"`
 	ConsecSuccess int       `json:"consec_success"`
 	ConsecFail    int       `json:"consec_fail"`
 	ResponseMs    int64     `json:"response_ms"`
@@ -432,13 +431,11 @@ func (s *UpstreamHealthCheckService) updateUpstreamHealth(ctx context.Context, u
 	if result.success {
 		if health.ConsecSuccess >= s.cfg.HealthyThreshold {
 			health.Status = "active"
-			health.LastError = ""
 		}
 	} else {
 		if health.ConsecFail >= s.cfg.UnhealthyThreshold {
 			health.Status = "error"
 			health.LastErrorTime = time.Now()
-			health.LastError = result.errorMessage
 		}
 	}
 
