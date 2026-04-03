@@ -20,6 +20,7 @@ import (
 	"github.com/lyp256/airouter/internal/service"
 	"github.com/lyp256/airouter/pkg/anthropic"
 	"github.com/lyp256/airouter/pkg/openai"
+	"github.com/lyp256/airouter/pkg/tokenizer"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -847,7 +848,7 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 						firstTokenLatency = time.Since(startTime).Milliseconds()
 						firstTokenRecorded = true
 					}
-					estimatedTokens += len(choice.Text) / 4
+					estimatedTokens += tokenizer.GetTokens(modelCfg.Name, choice.Text)
 				}
 			}
 		}
