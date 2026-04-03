@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"sort"
 	"time"
 
 	"github.com/lyp256/airouter/internal/cache"
@@ -154,40 +153,26 @@ func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream) *model.Up
 		return nil
 	}
 
-	// 按优先级排序
-	sort.Slice(activeUpstreams, func(i, j int) bool {
-		return activeUpstreams[i].Priority > activeUpstreams[j].Priority
-	})
-
-	// 找出最高优先级的上游模型
-	maxPriority := activeUpstreams[0].Priority
-	priorityUpstreams := make([]*model.Upstream, 0)
-	for _, u := range activeUpstreams {
-		if u.Priority == maxPriority {
-			priorityUpstreams = append(priorityUpstreams, u)
-		}
-	}
-
 	// 按权重随机选择
 	totalWeight := 0
-	for _, u := range priorityUpstreams {
+	for _, u := range activeUpstreams {
 		totalWeight += u.Weight
 	}
 
 	if totalWeight == 0 {
-		return priorityUpstreams[0]
+		return activeUpstreams[0]
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	n := r.Intn(totalWeight)
-	for _, u := range priorityUpstreams {
+	for _, u := range activeUpstreams {
 		n -= u.Weight
 		if n < 0 {
 			return u
 		}
 	}
 
-	return priorityUpstreams[0]
+	return activeUpstreams[0]
 }
 
 // isUpstreamHealthy 从缓存检查上游是否健康

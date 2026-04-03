@@ -268,7 +268,6 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | `ProviderKeyID` | string | 关联供应商密钥 |
 | `ProviderModel` | string | 供应商实际模型名 |
 | `Weight` | int | 权重（负载均衡用） |
-| `Priority` | int | 优先级 |
 | `Status` | string | 状态：active, disabled, error（运行时状态存储在缓存中，数据库仅保留初始值） |
 | `Enabled` | bool | 是否启用 |
 | `CreatedAt` | time.Time | 创建时间 |
@@ -555,8 +554,8 @@ web/
 
 ### 7.1 上游模型选择器 (upstream_selector.go)
 
-- 支持 **权重（weight）** 和 **优先级（priority）** 两种策略
-- 按优先级分组，同优先级内按权重负载均衡
+- 支持 **权重（weight）** 负载均衡策略
+- 自动过滤不健康的上游模型
 - 支持 **故障转移**：上游模型失败自动切换
 - 返回上游模型 + 供应商 + 供应商密钥 + 解密后的 API Key
 
