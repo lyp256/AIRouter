@@ -90,10 +90,35 @@ func (h *ProxyHandler) ChatCompletions(c *gin.Context) {
 	startTime := time.Now()
 	requestID := middleware.GetRequestID(c)
 
-	// 处理流式请求（流式请求不支持重试）
+	// 处理流式请求
 	if req.Stream {
-		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
+		h.handleStreamChatWithRetry(c, &req, modelCfg, startTime, requestID)
+		return
+	}
+
+	// 非流式请求 - 支持重试
+	h.handleNormalChatWithRetry(c, &req, modelCfg, startTime, requestID)
+}
+
+// handleStreamChatWithRetry 处理流式请求（支持初始连接重试）
+func (h *ProxyHandler) handleStreamChatWithRetry(c *gin.Context, req *openai.ChatCompletionRequest, modelCfg *model.Model, startTime time.Time, requestID string) {
+	maxRetries := 3
+	if h.retryConfig != nil && h.retryConfig.Enabled {
+		maxRetries = h.retryConfig.MaxAttempts
+	}
+
+	excludeUpstreams := make([]string, 0)
+	var lastErr error
+	var lastStatusCode int
+	var lastErrMsg string
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 选择上游模型（排除已失败的上游）
+		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID, excludeUpstreams...)
 		if err != nil {
+			if lastErr != nil {
+				break
+			}
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": gin.H{
 					"message": "没有可用的上游模型",
@@ -102,17 +127,56 @@ func (h *ProxyHandler) ChatCompletions(c *gin.Context) {
 			})
 			return
 		}
+
+		// 创建客户端
 		client := provider.NewClient(provider.ClientConfig{
 			BaseURL: selection.Provider.BaseURL,
-			APIKey:  selection.DecryptedKey,
+			APIKey:  selection.RawKey,
 		})
-		reqBody := h.prepareRequestBody(&req, selection.Upstream)
-		h.handleStreamChat(c, client, reqBody, selection, *modelCfg, startTime, requestID)
-		return
+
+		// 准备请求
+		reqBody := h.prepareRequestBody(req, selection.Upstream)
+
+		err = h.handleStreamChat(c, client, reqBody, selection, *modelCfg, startTime, requestID)
+		if err == nil {
+			return
+		}
+
+		// 发生了错误，检查是否可重试
+		h.logger.Warn("流式请求上游失败，准备重试",
+			zap.Error(err),
+			zap.String("request_id", requestID),
+			zap.String("upstream_id", selection.Upstream.ID),
+			zap.Int("attempt", attempt))
+
+		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		excludeUpstreams = append(excludeUpstreams, selection.Upstream.ID)
+		lastErr = err
+
+		if retryErr, ok := err.(*service.RetryableError); ok {
+			lastStatusCode = retryErr.StatusCode
+			lastErrMsg = retryErr.Err.Error()
+		} else {
+			lastErrMsg = err.Error()
+		}
 	}
 
-	// 非流式请求 - 支持重试
-	h.handleNormalChatWithRetry(c, &req, modelCfg, startTime, requestID)
+	// 所有重试都失败
+	latency := time.Since(startTime).Milliseconds()
+	h.logger.Error("流式请求所有上游重试失败",
+		zap.String("request_id", requestID),
+		zap.Int("attempts", maxRetries),
+		zap.String("last_error", lastErrMsg))
+
+	// 记录失败日志
+	h.logUsage(c, nil, modelCfg, &openai.Usage{}, latency, 0, latency, "error", lastStatusCode, lastErrMsg)
+
+	c.JSON(http.StatusBadGateway, gin.H{
+		"error": gin.H{
+			"message": "请求上游服务失败: " + lastErrMsg,
+			"type":    "upstream_error",
+		},
+	})
 }
 
 // prepareRequestBody 准备请求体
@@ -175,14 +239,14 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 		maxRetries = h.retryConfig.MaxAttempts
 	}
 
-	excludeUpstreams := make(map[string]bool)
+	excludeUpstreams := make([]string, 0)
 	var lastErr error
 	var lastStatusCode int
 	var lastErrMsg string
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// 选择上游模型（排除已失败的上游）
-		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
+		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID, excludeUpstreams...)
 		if err != nil {
 			if lastErr != nil {
 				// 所有上游都已尝试过，返回最后的错误
@@ -200,7 +264,7 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 		// 创建客户端
 		client := provider.NewClient(provider.ClientConfig{
 			BaseURL: selection.Provider.BaseURL,
-			APIKey:  selection.DecryptedKey,
+			APIKey:  selection.RawKey,
 		})
 
 		// 准备请求
@@ -227,7 +291,7 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 				zap.String("upstream_id", selection.Upstream.ID),
 				zap.Int("attempt", attempt))
 			_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-			excludeUpstreams[selection.Upstream.ID] = true
+			excludeUpstreams = append(excludeUpstreams, selection.Upstream.ID)
 			lastErr = err
 			lastErrMsg = err.Error()
 			continue
@@ -244,7 +308,7 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 					zap.String("upstream_id", selection.Upstream.ID),
 					zap.Int("attempt", attempt))
 				_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-				excludeUpstreams[selection.Upstream.ID] = true
+				excludeUpstreams = append(excludeUpstreams, selection.Upstream.ID)
 				lastStatusCode = resp.StatusCode
 				lastErrMsg = string(resp.Body)
 				continue
@@ -317,7 +381,7 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 
 // handleStreamChat 处理流式请求
 func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client, reqBody map[string]interface{},
-	selection *service.UpstreamSelection, modelCfg model.Model, startTime time.Time, requestID string) {
+	selection *service.UpstreamSelection, modelCfg model.Model, startTime time.Time, requestID string) error {
 
 	// 确保设置 stream: true
 	reqBody["stream"] = true
@@ -340,57 +404,21 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 	latency := time.Since(startTime).Milliseconds()
 
 	if err != nil {
-		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": gin.H{
-				"message": "请求上游服务失败: " + err.Error(),
-				"type":    "upstream_error",
-			},
-		})
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
 	// 检查上游错误响应
 	if resp.StatusCode >= 400 {
-		h.logger.Error("上游返回错误",
-			zap.Int("status", resp.StatusCode),
-			zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		// 读取错误响应体
 		bodyBytes, readErr := io.ReadAll(resp.Body)
-		errMsg := "读取上游错误响应失败"
 		if readErr != nil {
-			c.JSON(resp.StatusCode, gin.H{
-				"error": gin.H{
-					"message": errMsg,
-					"type":    "upstream_error",
-				},
-			})
-		} else {
-			// 尝试解析上游错误响应
-			var upstreamErr openai.ErrorResponse
-			if json.Unmarshal(bodyBytes, &upstreamErr) == nil && upstreamErr.Message != "" {
-				errMsg = upstreamErr.Message
-				c.JSON(resp.StatusCode, gin.H{
-					"error": gin.H{
-						"message": upstreamErr.Message,
-						"type":    upstreamErr.Type,
-						"code":    upstreamErr.Code,
-					},
-				})
-			} else {
-				errMsg = string(bodyBytes)
-				// 无法解析，原样返回
-				c.Data(resp.StatusCode, "application/json", bodyBytes)
-			}
+			return fmt.Errorf("上游返回错误 %d 且读取响应失败: %w", resp.StatusCode, readErr)
 		}
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
-		return
+		return &service.RetryableError{
+			Err:        fmt.Errorf("上游返回错误: %s", string(bodyBytes)),
+			StatusCode: resp.StatusCode,
+		}
 	}
 
 	// 记录成功
@@ -482,6 +510,8 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
 	}, latency, firstTokenLatency, totalDuration, "success", 200, "")
+
+	return nil
 }
 
 // Models 模型列表 API
@@ -539,38 +569,162 @@ func (h *ProxyHandler) Completions(c *gin.Context) {
 		return
 	}
 
-	// 选择上游模型
-	selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error": gin.H{
-				"message": "没有可用的上游模型",
-				"type":    "internal_error",
-			},
-		})
-		return
-	}
-
-	// 创建客户端
-	client := provider.NewClient(provider.ClientConfig{
-		BaseURL: selection.Provider.BaseURL,
-		APIKey:  selection.DecryptedKey,
-	})
-
-	// 准备请求
-	reqBody := h.prepareCompletionRequestBody(&req, selection.Upstream)
-
 	startTime := time.Now()
 	requestID := middleware.GetRequestID(c)
 
 	// 处理流式请求
 	if req.Stream {
-		h.handleStreamCompletion(c, client, reqBody, selection, *modelCfg, startTime, requestID)
+		h.handleStreamCompletionWithRetry(c, &req, modelCfg, startTime, requestID)
 		return
 	}
 
-	// 非流式请求
-	h.handleNormalCompletion(c, client, reqBody, selection, *modelCfg, startTime, requestID)
+	// 非流式请求（支持重试）
+	maxRetries := 3
+	if h.retryConfig != nil && h.retryConfig.Enabled {
+		maxRetries = h.retryConfig.MaxAttempts
+	}
+
+	excludeUpstreams := make([]string, 0)
+	var lastErr error
+	var lastStatusCode int
+	var lastErrMsg string
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 选择上游模型（排除已失败的上游）
+		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID, excludeUpstreams...)
+		if err != nil {
+			if lastErr != nil {
+				break
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": gin.H{
+					"message": "没有可用的上游模型",
+					"type":    "internal_error",
+				},
+			})
+			return
+		}
+
+		// 创建客户端
+		client := provider.NewClient(provider.ClientConfig{
+			BaseURL: selection.Provider.BaseURL,
+			APIKey:  selection.RawKey,
+		})
+
+		// 准备请求
+		reqBody := h.prepareCompletionRequestBody(&req, selection.Upstream)
+
+		err = h.handleNormalCompletion(c, client, reqBody, selection, *modelCfg, startTime, requestID)
+		if err == nil {
+			return
+		}
+
+		h.logger.Warn("Completions 请求上游失败，准备重试",
+			zap.Error(err),
+			zap.String("request_id", requestID),
+			zap.String("upstream_id", selection.Upstream.ID),
+			zap.Int("attempt", attempt))
+
+		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		excludeUpstreams = append(excludeUpstreams, selection.Upstream.ID)
+		lastErr = err
+
+		if retryErr, ok := err.(*service.RetryableError); ok {
+			lastStatusCode = retryErr.StatusCode
+			lastErrMsg = retryErr.Err.Error()
+		} else {
+			lastErrMsg = err.Error()
+		}
+	}
+
+	// 所有重试都失败
+	latency := time.Since(startTime).Milliseconds()
+	h.logUsage(c, nil, modelCfg, &openai.Usage{}, latency, 0, latency, "error", lastStatusCode, lastErrMsg)
+	c.JSON(http.StatusBadGateway, gin.H{
+		"error": gin.H{
+			"message": "请求上游服务失败: " + lastErrMsg,
+			"type":    "upstream_error",
+		},
+	})
+}
+
+// handleStreamCompletionWithRetry 处理流式 Completions 请求（支持初始连接重试）
+func (h *ProxyHandler) handleStreamCompletionWithRetry(c *gin.Context, req *openai.CompletionRequest, modelCfg *model.Model, startTime time.Time, requestID string) {
+	maxRetries := 3
+	if h.retryConfig != nil && h.retryConfig.Enabled {
+		maxRetries = h.retryConfig.MaxAttempts
+	}
+
+	excludeUpstreams := make([]string, 0)
+	var lastErr error
+	var lastStatusCode int
+	var lastErrMsg string
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 选择上游模型（排除已失败的上游）
+		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID, excludeUpstreams...)
+		if err != nil {
+			if lastErr != nil {
+				break
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": gin.H{
+					"message": "没有可用的上游模型",
+					"type":    "internal_error",
+				},
+			})
+			return
+		}
+
+		// 创建客户端
+		client := provider.NewClient(provider.ClientConfig{
+			BaseURL: selection.Provider.BaseURL,
+			APIKey:  selection.RawKey,
+		})
+
+		// 准备请求
+		reqBody := h.prepareCompletionRequestBody(req, selection.Upstream)
+
+		err = h.handleStreamCompletion(c, client, reqBody, selection, *modelCfg, startTime, requestID)
+		if err == nil {
+			return
+		}
+
+		// 发生了错误，检查是否可重试
+		h.logger.Warn("流式 Completions 请求上游失败，准备重试",
+			zap.Error(err),
+			zap.String("request_id", requestID),
+			zap.String("upstream_id", selection.Upstream.ID),
+			zap.Int("attempt", attempt))
+
+		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+		excludeUpstreams = append(excludeUpstreams, selection.Upstream.ID)
+		lastErr = err
+
+		if retryErr, ok := err.(*service.RetryableError); ok {
+			lastStatusCode = retryErr.StatusCode
+			lastErrMsg = retryErr.Err.Error()
+		} else {
+			lastErrMsg = err.Error()
+		}
+	}
+
+	// 所有重试都失败
+	latency := time.Since(startTime).Milliseconds()
+	h.logger.Error("流式 Completions 请求所有上游重试失败",
+		zap.String("request_id", requestID),
+		zap.Int("attempts", maxRetries),
+		zap.String("last_error", lastErrMsg))
+
+	// 记录失败日志
+	h.logUsage(c, nil, modelCfg, &openai.Usage{}, latency, 0, latency, "error", lastStatusCode, lastErrMsg)
+
+	c.JSON(http.StatusBadGateway, gin.H{
+		"error": gin.H{
+			"message": "请求上游服务失败: " + lastErrMsg,
+			"type":    "upstream_error",
+		},
+	})
 }
 
 // prepareCompletionRequestBody 准备 Completions 请求体
@@ -631,7 +785,7 @@ func (h *ProxyHandler) prepareCompletionRequestBody(req *openai.CompletionReques
 
 // handleNormalCompletion 处理非流式 Completions 请求
 func (h *ProxyHandler) handleNormalCompletion(c *gin.Context, client *provider.Client, reqBody map[string]interface{},
-	selection *service.UpstreamSelection, modelCfg model.Model, startTime time.Time, requestID string) {
+	selection *service.UpstreamSelection, modelCfg model.Model, startTime time.Time, requestID string) error {
 
 	// 获取 API 路径，如果供应商配置了则使用，否则使用默认路径
 	apiPath := selection.Provider.APIPath
@@ -647,47 +801,16 @@ func (h *ProxyHandler) handleNormalCompletion(c *gin.Context, client *provider.C
 	latency := time.Since(startTime).Milliseconds()
 
 	if err != nil {
-		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": gin.H{
-				"message": "请求上游服务失败: " + err.Error(),
-				"type":    "upstream_error",
-			},
-		})
-		return
+		return err
 	}
 
 	// 检查上游错误响应
 	if resp.StatusCode >= 400 {
-		h.logger.Error("上游返回错误",
-			zap.Int("status", resp.StatusCode),
-			zap.String("body", string(resp.Body)),
-			zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		// 尝试解析上游错误响应
-		var upstreamErr openai.ErrorResponse
-		errMsg := string(resp.Body)
-		if err := json.Unmarshal(resp.Body, &upstreamErr); err == nil && upstreamErr.Message != "" {
-			errMsg = upstreamErr.Message
-			c.JSON(resp.StatusCode, gin.H{
-				"error": gin.H{
-					"message": upstreamErr.Message,
-					"type":    upstreamErr.Type,
-					"code":    upstreamErr.Code,
-				},
-			})
-		} else {
-			// 无法解析，原样返回
-			c.Data(resp.StatusCode, "application/json", resp.Body)
+		return &service.RetryableError{
+			Err:        fmt.Errorf("上游返回错误: %s", string(resp.Body)),
+			StatusCode: resp.StatusCode,
 		}
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
-		return
 	}
-
 	// 记录成功
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 
@@ -703,11 +826,12 @@ func (h *ProxyHandler) handleNormalCompletion(c *gin.Context, client *provider.C
 
 	// 返回响应
 	c.Data(resp.StatusCode, "application/json", resp.Body)
+	return nil
 }
 
 // handleStreamCompletion 处理流式 Completions 请求
 func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.Client, reqBody map[string]interface{},
-	selection *service.UpstreamSelection, modelCfg model.Model, startTime time.Time, requestID string) {
+	selection *service.UpstreamSelection, modelCfg model.Model, startTime time.Time, requestID string) error {
 
 	// 确保设置 stream: true
 	reqBody["stream"] = true
@@ -730,57 +854,21 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 	latency := time.Since(startTime).Milliseconds()
 
 	if err != nil {
-		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": gin.H{
-				"message": "请求上游服务失败: " + err.Error(),
-				"type":    "upstream_error",
-			},
-		})
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
 	// 检查上游错误响应
 	if resp.StatusCode >= 400 {
-		h.logger.Error("上游返回错误",
-			zap.Int("status", resp.StatusCode),
-			zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		// 读取错误响应体
 		bodyBytes, readErr := io.ReadAll(resp.Body)
-		errMsg := "读取上游错误响应失败"
 		if readErr != nil {
-			c.JSON(resp.StatusCode, gin.H{
-				"error": gin.H{
-					"message": errMsg,
-					"type":    "upstream_error",
-				},
-			})
-		} else {
-			// 尝试解析上游错误响应
-			var upstreamErr openai.ErrorResponse
-			if json.Unmarshal(bodyBytes, &upstreamErr) == nil && upstreamErr.Message != "" {
-				errMsg = upstreamErr.Message
-				c.JSON(resp.StatusCode, gin.H{
-					"error": gin.H{
-						"message": upstreamErr.Message,
-						"type":    upstreamErr.Type,
-						"code":    upstreamErr.Code,
-					},
-				})
-			} else {
-				errMsg = string(bodyBytes)
-				// 无法解析，原样返回
-				c.Data(resp.StatusCode, "application/json", bodyBytes)
-			}
+			return fmt.Errorf("上游返回错误 %d 且读取响应失败: %w", resp.StatusCode, readErr)
 		}
-		// 记录失败日志
-		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
-		return
+		return &service.RetryableError{
+			Err:        fmt.Errorf("上游返回错误: %s", string(bodyBytes)),
+			StatusCode: resp.StatusCode,
+		}
 	}
 
 	// 记录成功
@@ -860,6 +948,8 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
 	}, latency, firstTokenLatency, totalDuration, "success", 200, "")
+
+	return nil
 }
 
 // Embeddings Embeddings API
@@ -898,97 +988,110 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 		return
 	}
 
-	// 选择上游模型
-	selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error": gin.H{
-				"message": "没有可用的上游模型",
-				"type":    "internal_error",
-			},
-		})
-		return
-	}
-
-	// 创建客户端
-	client := provider.NewClient(provider.ClientConfig{
-		BaseURL: selection.Provider.BaseURL,
-		APIKey:  selection.DecryptedKey,
-	})
-
-	// 准备请求
-	reqBody := map[string]interface{}{
-		"model": selection.Upstream.ProviderModel,
-		"input": req.Input,
-	}
-	if req.EncodingFormat != "" {
-		reqBody["encoding_format"] = req.EncodingFormat
-	}
-	if req.Dimensions > 0 {
-		reqBody["dimensions"] = req.Dimensions
-	}
-
 	startTime := time.Now()
-
-	// 获取 API 路径
-	apiPath := selection.Provider.APIPath
-	if apiPath == "" {
-		apiPath = "/v1/embeddings"
+	maxRetries := 3
+	if h.retryConfig != nil && h.retryConfig.Enabled {
+		maxRetries = h.retryConfig.MaxAttempts
 	}
 
-	resp, err := client.Do(c.Request.Context(), provider.Request{
-		Method: "POST",
-		Path:   apiPath,
-		Body:   reqBody,
-	})
-	latency := time.Since(startTime).Milliseconds()
+	excludeUpstreams := make([]string, 0)
+	var lastErr error
+	var lastStatusCode int
+	var lastErrMsg string
 
-	if err != nil {
-		h.logger.Error("请求上游失败", zap.Error(err))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": gin.H{
-				"message": "请求上游服务失败: " + err.Error(),
-				"type":    "upstream_error",
-			},
-		})
-		return
-	}
-
-	if resp.StatusCode >= 400 {
-		h.logger.Error("上游返回错误",
-			zap.Int("status", resp.StatusCode),
-			zap.String("body", string(resp.Body)))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		var upstreamErr openai.ErrorResponse
-		errMsg := string(resp.Body)
-		if err := json.Unmarshal(resp.Body, &upstreamErr); err == nil && upstreamErr.Message != "" {
-			errMsg = upstreamErr.Message
-			c.JSON(resp.StatusCode, gin.H{
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 选择上游模型（排除已失败的上游）
+		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID, excludeUpstreams...)
+		if err != nil {
+			if lastErr != nil {
+				break
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": gin.H{
-					"message": upstreamErr.Message,
-					"type":    upstreamErr.Type,
-					"code":    upstreamErr.Code,
+					"message": "没有可用的上游模型",
+					"type":    "internal_error",
 				},
 			})
-		} else {
-			c.Data(resp.StatusCode, "application/json", resp.Body)
+			return
 		}
-		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
+
+		// 创建客户端
+		client := provider.NewClient(provider.ClientConfig{
+			BaseURL: selection.Provider.BaseURL,
+			APIKey:  selection.RawKey,
+		})
+
+		// 准备请求
+		reqBody := map[string]interface{}{
+			"model": selection.Upstream.ProviderModel,
+			"input": req.Input,
+		}
+		if req.EncodingFormat != "" {
+			reqBody["encoding_format"] = req.EncodingFormat
+		}
+		if req.Dimensions > 0 {
+			reqBody["dimensions"] = req.Dimensions
+		}
+
+		// 获取 API 路径
+		apiPath := selection.Provider.APIPath
+		if apiPath == "" {
+			apiPath = "/v1/embeddings"
+		}
+
+		resp, err := client.Do(c.Request.Context(), provider.Request{
+			Method: "POST",
+			Path:   apiPath,
+			Body:   reqBody,
+		})
+		latency := time.Since(startTime).Milliseconds()
+
+		if err != nil {
+			h.logger.Warn("Embeddings 请求上游失败，准备重试",
+				zap.Error(err),
+				zap.String("upstream_id", selection.Upstream.ID),
+				zap.Int("attempt", attempt))
+			_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+			excludeUpstreams = append(excludeUpstreams, selection.Upstream.ID)
+			lastErr = err
+			lastErrMsg = err.Error()
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			h.logger.Warn("Embeddings 上游返回错误，准备重试",
+				zap.Int("status", resp.StatusCode),
+				zap.String("upstream_id", selection.Upstream.ID),
+				zap.Int("attempt", attempt))
+			_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
+			excludeUpstreams = append(excludeUpstreams, selection.Upstream.ID)
+			lastStatusCode = resp.StatusCode
+			lastErrMsg = string(resp.Body)
+			continue
+		}
+
+		_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
+
+		var usage openai.Usage
+		var embResp openai.EmbeddingResponse
+		if err := json.Unmarshal(resp.Body, &embResp); err == nil && embResp.Usage != nil {
+			usage = *embResp.Usage
+		}
+		h.logUsage(c, selection, modelCfg, &usage, latency, 0, latency, "success", 200, "")
+
+		c.Data(resp.StatusCode, "application/json", resp.Body)
 		return
 	}
 
-	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-
-	var usage openai.Usage
-	var embResp openai.EmbeddingResponse
-	if err := json.Unmarshal(resp.Body, &embResp); err == nil && embResp.Usage != nil {
-		usage = *embResp.Usage
-	}
-	h.logUsage(c, selection, modelCfg, &usage, latency, 0, latency, "success", 200, "")
-
-	c.Data(resp.StatusCode, "application/json", resp.Body)
+	// 所有重试都失败
+	latency := time.Since(startTime).Milliseconds()
+	h.logUsage(c, nil, modelCfg, &openai.Usage{}, latency, 0, latency, "error", lastStatusCode, lastErrMsg)
+	c.JSON(http.StatusBadGateway, gin.H{
+		"error": gin.H{
+			"message": "请求上游服务失败: " + lastErrMsg,
+			"type":    "upstream_error",
+		},
+	})
 }
 
 // logUsage 记录使用日志
@@ -1204,17 +1307,84 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 
 	// 处理流式请求
 	if req.Stream {
-		apiPath := selection.Provider.APIPath
-		if apiPath == "" {
-			apiPath = "/v1/messages"
+		maxRetries := 3
+		if h.retryConfig != nil && h.retryConfig.Enabled {
+			maxRetries = h.retryConfig.MaxAttempts
 		}
-		client := provider.NewAnthropicClient(provider.AnthropicConfig{
-			BaseURL:    selection.Provider.BaseURL,
-			APIKey:     selection.DecryptedKey,
-			APIPath:    apiPath,
-			BetaHeader: betaHeader,
+
+		excludeUpstreams := make([]string, 0)
+		var lastErr error
+		var lastStatusCode int
+		var lastErrMsg string
+
+		for attempt := 1; attempt <= maxRetries; attempt++ { // 选择上游模型（排除已失败的上游）
+			var sel *service.UpstreamSelection
+			var err error
+			if attempt == 1 {
+				sel = selection
+			} else {
+				sel, err = h.upstreamSelector.SelectUpstream(modelCfg.ID, excludeUpstreams...)
+				if err != nil {
+					if lastErr != nil {
+						break
+					}
+					c.JSON(http.StatusServiceUnavailable, gin.H{
+						"type":    "internal_error",
+						"message": "没有可用的上游模型",
+					})
+					return
+				}
+			}
+
+			apiPath := sel.Provider.APIPath
+			if apiPath == "" {
+				apiPath = "/v1/messages"
+			}
+			client := provider.NewAnthropicClient(provider.AnthropicConfig{
+				BaseURL:    sel.Provider.BaseURL,
+				APIKey:     sel.RawKey,
+				APIPath:    apiPath,
+				BetaHeader: betaHeader,
+			})
+
+			// 替换为当前选中的模型
+			req.Model = sel.Upstream.ProviderModel
+
+			err = h.handleAnthropicStream(c, client, req, sel, modelCfg, startTime, requestID)
+			if err == nil {
+				return
+			}
+
+			// 发生了错误，检查是否可重试
+			h.logger.Warn("Anthropic 流式请求上游失败，准备重试",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+				zap.String("upstream_id", sel.Upstream.ID),
+				zap.Int("attempt", attempt))
+
+			_ = h.upstreamSelector.MarkUpstreamError(sel.Upstream.ID)
+			excludeUpstreams = append(excludeUpstreams, sel.Upstream.ID)
+			lastErr = err
+
+			if retryErr, ok := err.(*service.RetryableError); ok {
+				lastStatusCode = retryErr.StatusCode
+				lastErrMsg = retryErr.Err.Error()
+			} else {
+				lastErrMsg = err.Error()
+			}
+		}
+
+		// 所有重试都失败
+		latency := time.Since(startTime).Milliseconds()
+		h.logger.Error("请求 Anthropic 所有流式重试失败",
+			zap.String("request_id", requestID),
+			zap.Int("last_status", lastStatusCode),
+			zap.String("last_error", lastErrMsg))
+		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", lastStatusCode, lastErrMsg)
+		c.JSON(http.StatusBadGateway, gin.H{
+			"type":    "upstream_error",
+			"message": "请求上游服务失败: " + lastErrMsg,
 		})
-		h.handleAnthropicStream(c, client, req, selection, modelCfg, startTime, requestID)
 		return
 	}
 
@@ -1224,7 +1394,7 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 		maxRetries = h.retryConfig.MaxAttempts
 	}
 
-	excludeUpstreams := make(map[string]bool)
+	excludeUpstreams := make([]string, 0)
 	var lastErr error
 	var lastErrMsg string
 	var lastStatusCode int
@@ -1236,7 +1406,7 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 		if attempt == 1 {
 			sel = selection
 		} else {
-			sel, err = h.upstreamSelector.SelectUpstream(modelCfg.ID)
+			sel, err = h.upstreamSelector.SelectUpstream(modelCfg.ID, excludeUpstreams...)
 			if err != nil {
 				if lastErr != nil {
 					break
@@ -1256,7 +1426,7 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 
 		client := provider.NewAnthropicClient(provider.AnthropicConfig{
 			BaseURL:    sel.Provider.BaseURL,
-			APIKey:     sel.DecryptedKey,
+			APIKey:     sel.RawKey,
 			APIPath:    apiPath,
 			BetaHeader: betaHeader,
 		})
@@ -1271,7 +1441,7 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 				zap.String("upstream_id", sel.Upstream.ID),
 				zap.Int("attempt", attempt))
 			_ = h.upstreamSelector.MarkUpstreamError(sel.Upstream.ID)
-			excludeUpstreams[sel.Upstream.ID] = true
+			excludeUpstreams = append(excludeUpstreams, sel.Upstream.ID)
 			lastErr = err
 			lastErrMsg = err.Error()
 			continue
@@ -1310,58 +1480,30 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 // handleAnthropicStream 处理 Anthropic 流式请求
 func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.AnthropicClient,
 	req *anthropic.MessagesRequest, selection *service.UpstreamSelection, modelCfg *model.Model,
-	startTime time.Time, requestID string) {
+	startTime time.Time, requestID string) error {
 
 	resp, err := client.MessagesStream(c.Request.Context(), *req)
 	latency := time.Since(startTime).Milliseconds()
 
 	if err != nil {
-		h.logger.Error("请求 Anthropic 失败", zap.Error(err), zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		// 记录失败日志
-		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{
-			"type":    "upstream_error",
-			"message": "请求上游服务失败: " + err.Error(),
-		})
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
 	// 检查上游错误响应
 	if resp.StatusCode >= 400 {
-		h.logger.Error("上游返回错误",
-			zap.Int("status", resp.StatusCode),
-			zap.String("request_id", requestID))
-		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
 		// 读取错误响应体
 		bodyBytes, readErr := io.ReadAll(resp.Body)
-		errMsg := "读取上游错误响应失败"
 		if readErr != nil {
-			c.JSON(resp.StatusCode, gin.H{
-				"type":    "upstream_error",
-				"message": errMsg,
-			})
-		} else {
-			// 尝试解析上游错误响应
-			var upstreamErr anthropic.ErrorResponse
-			if json.Unmarshal(bodyBytes, &upstreamErr) == nil && upstreamErr.Message != "" {
-				errMsg = upstreamErr.Message
-				c.JSON(resp.StatusCode, gin.H{
-					"type":    upstreamErr.Type,
-					"message": upstreamErr.Message,
-				})
-			} else {
-				errMsg = string(bodyBytes)
-				// 无法解析，原样返回
-				c.Data(resp.StatusCode, "application/json", bodyBytes)
-			}
+			return fmt.Errorf("上游返回错误 %d 且读取响应失败: %w", resp.StatusCode, readErr)
 		}
-		// 记录失败日志
-		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", resp.StatusCode, errMsg)
-		return
+		return &service.RetryableError{
+			Err:        fmt.Errorf("上游返回错误: %s", string(bodyBytes)),
+			StatusCode: resp.StatusCode,
+		}
 	}
 
+	// 记录成功
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 
 	// 设置响应头
@@ -1443,4 +1585,6 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
 	}, latency, firstTokenLatency, totalDuration, "success", 200, "")
+
+	return nil
 }

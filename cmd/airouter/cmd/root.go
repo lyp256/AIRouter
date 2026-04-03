@@ -14,7 +14,6 @@ import (
 	"github.com/lyp256/airouter/internal/api/middleware"
 	"github.com/lyp256/airouter/internal/cache"
 	"github.com/lyp256/airouter/internal/config"
-	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/router"
 	"github.com/lyp256/airouter/internal/service"
 	"github.com/lyp256/airouter/internal/store/sqlite"
@@ -104,12 +103,6 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal("初始化数据库失败", zap.Error(err))
 	}
 
-	// 初始化加密器
-	encryptor, err := crypto.NewEncryptor(cfg.Security.EncryptionKey)
-	if err != nil {
-		logger.Fatal("初始化加密器失败", zap.Error(err))
-	}
-
 	// 初始化缓存
 	cacheInstance, err := cache.New(&cfg.Cache)
 	if err != nil {
@@ -122,13 +115,13 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 
 	// 初始化上游模型选择器
-	upstreamSelector := service.NewUpstreamSelector(db, encryptor, cacheInstance)
+	upstreamSelector := service.NewUpstreamSelector(db, cacheInstance)
 
 	// 初始化健康检查服务
 	var healthCheckSvc *service.UpstreamHealthCheckService
 	if cfg.HealthCheck.Enabled {
 		healthCheckSvc = service.NewUpstreamHealthCheckService(
-			db, encryptor, cacheInstance, &cfg.HealthCheck, logger,
+			db, cacheInstance, &cfg.HealthCheck, logger,
 		)
 	}
 
@@ -136,14 +129,14 @@ func runServe(cmd *cobra.Command, args []string) {
 	handlers := &router.Handlers{
 		Auth:     handler.NewAuthHandler(db, middleware.JWTConfig{Secret: cfg.Security.JWTSecret, Expire: cfg.Security.JWTExpire}),
 		Proxy:    handler.NewProxyHandler(db, logger, upstreamSelector, &cfg.Retry, cacheInstance),
-		Provider: handler.NewProviderHandler(db, encryptor),
+		Provider: handler.NewProviderHandler(db),
 		Model:    handler.NewModelHandler(db, upstreamSelector, cacheInstance),
-		User:     handler.NewUserHandler(db, encryptor),
+		User:     handler.NewUserHandler(db),
 		Stats:    handler.NewStatsHandler(db),
 	}
 
 	// 创建路由器
-	routerEngine := router.Setup(cfg, db, encryptor, logger, cacheInstance, handlers)
+	routerEngine := router.Setup(cfg, db, logger, cacheInstance, handlers)
 
 	// 启动服务
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

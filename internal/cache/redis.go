@@ -8,6 +8,7 @@ import (
 
 	gorediscache "github.com/go-redis/cache/v9"
 	"github.com/lyp256/airouter/internal/config"
+	"github.com/qianbin/directcache"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -16,6 +17,22 @@ type redisCache struct {
 	client *gorediscache.Cache
 	rdb    *redis.Client
 	ttl    time.Duration
+}
+
+type l1Cache struct {
+	*directcache.Cache
+}
+
+func (c *l1Cache) Set(key string, data []byte) {
+	c.Cache.Set([]byte(key), data)
+}
+
+func (c *l1Cache) Get(key string) ([]byte, bool) {
+	return c.Cache.Get([]byte(key))
+}
+
+func (c *l1Cache) Del(key string) {
+	c.Cache.Del([]byte(key))
 }
 
 func newRedisCache(cfg *config.CacheConfig) (*redisCache, error) {
@@ -37,8 +54,16 @@ func newRedisCache(cfg *config.CacheConfig) (*redisCache, error) {
 		ttl = 10 * time.Minute
 	}
 
+	// 启用本地二级缓存 (L1)
+	size := cfg.Size
+	if size <= 0 {
+		size = 16 // 默认 L1 16MB
+	}
+	localCache := &l1Cache{directcache.New(size * 1024 * 1024)}
+
 	client := gorediscache.New(&gorediscache.Options{
-		Redis: rdb,
+		Redis:      rdb,
+		LocalCache: localCache,
 	})
 
 	return &redisCache{

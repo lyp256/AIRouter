@@ -9,7 +9,6 @@ import (
 	"github.com/lyp256/airouter/internal/api/middleware"
 	"github.com/lyp256/airouter/internal/cache"
 	"github.com/lyp256/airouter/internal/config"
-	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/static"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -26,7 +25,7 @@ type Handlers struct {
 }
 
 // Setup 创建并配置 Gin 路由器
-func Setup(cfg *config.Config, db *gorm.DB, encryptor *crypto.Encryptor, logger *zap.Logger, cacheInstance cache.Cache, handlers *Handlers) *gin.Engine {
+func Setup(cfg *config.Config, db *gorm.DB, logger *zap.Logger, cacheInstance cache.Cache, handlers *Handlers) *gin.Engine {
 	router := gin.New()
 	router.Use(middleware.Logger(logger))
 	router.Use(middleware.Recovery(logger))
@@ -41,7 +40,6 @@ func Setup(cfg *config.Config, db *gorm.DB, encryptor *crypto.Encryptor, logger 
 	// 认证选择器中间件
 	authSelector := middleware.AuthSelector(middleware.AuthSelectorConfig{
 		DB:        db,
-		Encryptor: encryptor,
 		JWTConfig: jwtCfg,
 		Cache:     cacheInstance,
 	})

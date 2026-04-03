@@ -6,20 +6,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/model"
 	"gorm.io/gorm"
 )
 
 // ProviderHandler 供应商处理器
 type ProviderHandler struct {
-	db        *gorm.DB
-	encryptor *crypto.Encryptor
+	db *gorm.DB
 }
 
 // NewProviderHandler 创建供应商处理器
-func NewProviderHandler(db *gorm.DB, encryptor *crypto.Encryptor) *ProviderHandler {
-	return &ProviderHandler{db: db, encryptor: encryptor}
+func NewProviderHandler(db *gorm.DB) *ProviderHandler {
+	return &ProviderHandler{db: db}
 }
 
 // ListProviders 列出供应商
@@ -218,18 +216,11 @@ func (h *ProviderHandler) CreateProviderKey(c *gin.Context) {
 		return
 	}
 
-	// 加密密钥
-	encryptedKey, err := h.encryptor.Encrypt(req.Key)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "密钥加密失败"})
-		return
-	}
-
 	apiKey := model.ProviderKey{
 		ID:         uuid.New().String(),
 		ProviderID: providerID,
 		Name:       req.Name,
-		Key:        encryptedKey,
+		Key:        req.Key,
 		Status:     "active",
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
@@ -288,12 +279,7 @@ func (h *ProviderHandler) UpdateProviderKey(c *gin.Context) {
 		updates["name"] = req.Name
 	}
 	if req.Key != "" {
-		encryptedKey, err := h.encryptor.Encrypt(req.Key)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "密钥加密失败"})
-			return
-		}
-		updates["key"] = encryptedKey
+		updates["key"] = req.Key
 	}
 	if req.Status != "" {
 		updates["status"] = req.Status

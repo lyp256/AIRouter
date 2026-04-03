@@ -73,7 +73,6 @@ make web-dev      # 启动前端开发服务器
 
 | 配置项 | 说明 |
 |--------|------|
-| `security.encryption_key` | 32字节 AES 加密密钥 |
 | `security.jwt_secret` | JWT 签名密钥 |
 | `admin` | 初始管理员账户 |
 

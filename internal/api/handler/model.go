@@ -660,7 +660,7 @@ func doTestUpstream(ctx context.Context, selection *service.UpstreamSelection) *
 	case "openai", "openai_compatible":
 		client := provider.NewClient(provider.ClientConfig{
 			BaseURL: selection.Provider.BaseURL,
-			APIKey:  selection.DecryptedKey,
+			APIKey:  selection.RawKey,
 		})
 		apiPath := selection.Provider.APIPath
 		if apiPath == "" {
@@ -744,7 +744,7 @@ func doTestUpstream(ctx context.Context, selection *service.UpstreamSelection) *
 		}
 		client := provider.NewAnthropicClient(provider.AnthropicConfig{
 			BaseURL: selection.Provider.BaseURL,
-			APIKey:  selection.DecryptedKey,
+			APIKey:  selection.RawKey,
 			APIPath: apiPath,
 		})
 

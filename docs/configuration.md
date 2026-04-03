@@ -18,7 +18,6 @@ database:
   path: "./data/airouter.db"
 
 security:
-  encryption_key: "your-32-byte-encryption-key-here"
   jwt_secret: "your-jwt-secret-key"
   jwt_expire: "24h"
 
@@ -87,7 +86,6 @@ health_check:
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `encryption_key` | string | | **必填** 32 字节 AES-GCM 加密密钥，用于加密存储 API Key |
 | `jwt_secret` | string | | JWT Token 签名密钥 |
 | `jwt_expire` | duration | `24h` | JWT Token 过期时间 |
 | `admin_token` | string | | 管理 API 访问令牌 |

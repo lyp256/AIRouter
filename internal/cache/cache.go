@@ -28,6 +28,58 @@ type Cache interface {
 	IsDistributed() bool
 }
 
+// Namespace 带有前缀的缓存命名空间，提供泛型支持
+type Namespace[T any] struct {
+	cache Cache
+	name  string
+	ttl   time.Duration
+}
+
+// NewNamespace 创建一个新的命名空间
+func NewNamespace[T any](cache Cache, name string, ttl time.Duration) *Namespace[T] {
+	return &Namespace[T]{
+		cache: cache,
+		name:  name,
+		ttl:   ttl,
+	}
+}
+
+func (n *Namespace[T]) key(key string) string {
+	return n.name + ":" + key
+}
+
+// Get 从命名空间获取值
+func (n *Namespace[T]) Get(ctx context.Context, key string) (T, error) {
+	var val T
+	err := n.cache.Get(ctx, n.key(key), &val)
+	return val, err
+}
+
+// Set 设置值到命名空间
+func (n *Namespace[T]) Set(ctx context.Context, key string, val T, ttl time.Duration) error {
+	if ttl == 0 {
+		ttl = n.ttl
+	}
+	return n.cache.Set(ctx, n.key(key), val, ttl)
+}
+
+// Delete 从命名空间删除
+func (n *Namespace[T]) Delete(ctx context.Context, key string) error {
+	return n.cache.Delete(ctx, n.key(key))
+}
+
+// Once 命名空间版本的 Once
+func (n *Namespace[T]) Once(ctx context.Context, key string, ttl time.Duration, do func() (T, error)) (T, error) {
+	if ttl == 0 {
+		ttl = n.ttl
+	}
+	var val T
+	err := n.cache.Once(ctx, n.key(key), &val, ttl, func() (interface{}, error) {
+		return do()
+	})
+	return val, err
+}
+
 // New 根据配置创建缓存实例
 func New(cfg *config.CacheConfig) (Cache, error) {
 	if !cfg.Enabled {

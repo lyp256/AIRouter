@@ -38,10 +38,9 @@ type DatabaseConfig struct {
 
 // SecurityConfig 安全配置
 type SecurityConfig struct {
-	EncryptionKey string        `mapstructure:"encryption_key"`
-	JWTSecret     string        `mapstructure:"jwt_secret"`
-	JWTExpire     time.Duration `mapstructure:"jwt_expire"`
-	AdminToken    string        `mapstructure:"admin_token"`
+	JWTSecret  string        `mapstructure:"jwt_secret"`
+	JWTExpire  time.Duration `mapstructure:"jwt_expire"`
+	AdminToken string        `mapstructure:"admin_token"`
 }
 
 // LoggingConfig 日志配置
