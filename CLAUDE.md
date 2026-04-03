@@ -45,7 +45,7 @@ make web-build    # 构建前端生产版本
 - `(name, provider_type)` 为组合唯一索引，支持同名不同类型的模型
 - 价格字段使用 int64 存储（纳 BU/K tokens），前端显示为 BU/M tokens
 
-**Upstream（上游模型）**: model_id, provider_id, provider_key_id, provider_model, weight, priority, enabled
+**Upstream（上游模型）**: model_id, provider_id, provider_key_id, provider_model, weight, enabled
 - 上游模型的供应商类型必须与所属模型的 `provider_type` 匹配
 - 健康状态（active/error）存储在缓存中，不写入数据库
 - 缓存 key: `upstream:health:{upstreamID}`，TTL 1 小时，缓存未命中视为健康

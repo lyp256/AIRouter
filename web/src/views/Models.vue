@@ -45,8 +45,7 @@ const upstreamForm = ref({
   provider_id: '',
   provider_key_id: '',
   provider_model: '',
-  weight: 1,
-  priority: 0
+  weight: 1
 })
 
 async function loadData() {
@@ -170,8 +169,7 @@ function openCreateUpstreamModal(modelId: string) {
     provider_id: '',
     provider_key_id: '',
     provider_model: '',
-    weight: 1,
-    priority: 0
+    weight: 1
   }
   showUpstreamModal.value = true
 }
@@ -183,8 +181,7 @@ function openEditUpstreamModal(upstream: Upstream, modelId: string) {
     provider_id: upstream.provider_id,
     provider_key_id: upstream.provider_key_id,
     provider_model: upstream.provider_model,
-    weight: upstream.weight,
-    priority: upstream.priority
+    weight: upstream.weight
   }
   showUpstreamModal.value = true
 }
@@ -490,7 +487,6 @@ onMounted(loadData)
                       <th class="py-2 text-left">密钥</th>
                       <th class="py-2 text-left">实际模型</th>
                       <th class="py-2 text-left">权重</th>
-                      <th class="py-2 text-left">优先级</th>
                       <th class="py-2 text-left">启用</th>
                       <th class="py-2 text-left">健康状态</th>
                       <th class="py-2 text-right">操作</th>
@@ -502,7 +498,6 @@ onMounted(loadData)
                       <td class="py-2 text-gray-700 dark:text-gray-300">{{ u.provider_key_name || getKeyProviderName(u.provider_key_id) }}</td>
                       <td class="py-2 text-gray-700 dark:text-gray-300">{{ u.provider_model }}</td>
                       <td class="py-2 text-gray-700 dark:text-gray-300">{{ u.weight }}</td>
-                      <td class="py-2 text-gray-700 dark:text-gray-300">{{ u.priority }}</td>
                       <td class="py-2">
                         <span
                           :class="u.enabled ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'"
@@ -681,16 +676,9 @@ onMounted(loadData)
               <label class="block text-sm font-medium mb-1 dark:text-gray-200">实际模型名称</label>
               <input v-model="upstreamForm.provider_model" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" placeholder="gpt-4-turbo" required />
             </div>
-            <div class="grid grid-cols-2 gap-4">
-              <div>
-                <label class="block text-sm font-medium mb-1 dark:text-gray-200">权重</label>
-                <input v-model.number="upstreamForm.weight" type="number" min="1" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" />
-              </div>
-              <div>
-                <label class="block text-sm font-medium mb-1 dark:text-gray-200">优先级</label>
-                <input v-model.number="upstreamForm.priority" type="number" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" />
-                <p class="text-xs text-gray-500 mt-1">数值越大优先级越高</p>
-              </div>
+            <div>
+              <label class="block text-sm font-medium mb-1 dark:text-gray-200">权重</label>
+              <input v-model.number="upstreamForm.weight" type="number" min="1" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" />
             </div>
           </div>
           <div class="flex justify-end gap-2 mt-6">

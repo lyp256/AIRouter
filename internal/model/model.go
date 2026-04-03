@@ -96,7 +96,6 @@ type Upstream struct {
 	ProviderKeyID string         `gorm:"index;column:provider_key_id;size:36;not null" json:"provider_key_id"` // 关联供应商密钥
 	ProviderModel string         `gorm:"size:64;not null" json:"provider_model"`                               // 供应商实际模型名
 	Weight        int            `gorm:"default:1" json:"weight"`                                              // 权重（负载均衡用）
-	Priority      int            `gorm:"default:0" json:"priority"`                                            // 优先级
 	Status        string         `gorm:"size:16;default:active" json:"status"`                                 // active, disabled, error
 	Enabled       bool           `gorm:"default:true" json:"enabled"`
 	CreatedAt     time.Time      `json:"created_at"`

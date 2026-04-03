@@ -173,7 +173,7 @@ func migrateModelProviderType(db *gorm.DB) error {
 				JOIN providers p ON u.provider_id = p.id
 				WHERE u.model_id = models.id
 				AND u.enabled = 1
-				ORDER BY u.priority DESC, u.weight DESC
+				ORDER BY u.weight DESC
 				LIMIT 1
 			)
 			WHERE EXISTS (

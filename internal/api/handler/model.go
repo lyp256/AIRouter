@@ -404,7 +404,6 @@ type CreateUpstreamRequest struct {
 	ProviderKeyID string `json:"provider_key_id" binding:"required"`
 	ProviderModel string `json:"provider_model" binding:"required"`
 	Weight        int    `json:"weight"`
-	Priority      int    `json:"priority"`
 }
 
 // CreateUpstream 为模型添加上游模型
@@ -457,7 +456,6 @@ func (h *ModelHandler) CreateUpstream(c *gin.Context) {
 		ProviderKeyID: req.ProviderKeyID,
 		ProviderModel: req.ProviderModel,
 		Weight:        req.Weight,
-		Priority:      req.Priority,
 		Status:        "active",
 		Enabled:       true,
 		CreatedAt:     time.Now(),
@@ -484,7 +482,6 @@ type UpdateUpstreamRequest struct {
 	ProviderKeyID string `json:"provider_key_id"`
 	ProviderModel string `json:"provider_model"`
 	Weight        *int   `json:"weight"`
-	Priority      *int   `json:"priority"`
 	Enabled       *bool  `json:"enabled"`
 }
 
@@ -526,9 +523,6 @@ func (h *ModelHandler) UpdateUpstream(c *gin.Context) {
 	}
 	if req.Weight != nil {
 		updates["weight"] = *req.Weight
-	}
-	if req.Priority != nil {
-		updates["priority"] = *req.Priority
 	}
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled

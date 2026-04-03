@@ -35,7 +35,7 @@ export interface Provider {
 }
 
 // ProviderKey 供应商密钥
-// 移除了 weight 和 priority 字段（已迁移到 Upstream）
+// 移除了 weight 字段（已迁移到 Upstream）
 export interface ProviderKey {
   id: string
   provider_id: string
@@ -58,7 +58,6 @@ export interface Upstream {
   provider_key_id: string
   provider_model: string
   weight: number
-  priority: number
   status: string
   enabled: boolean
   created_at: string
