@@ -320,7 +320,6 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 				zap.String("body", string(resp.Body)),
 				zap.String("request_id", requestID))
 			_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-			excludeUpstreams = append(excludeUpstreams, selection.Upstream.ID)
 
 			var upstreamErr openai.ErrorResponse
 			errMsg := string(resp.Body)
@@ -807,17 +806,11 @@ func (h *ProxyHandler) handleNormalCompletion(c *gin.Context, client *provider.C
 
 	// 检查上游错误响应
 	if resp.StatusCode >= 400 {
-		// 读取错误响应体
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("上游返回错误 %d 且读取响应失败: %w", resp.StatusCode, readErr)
-		}
 		return &service.RetryableError{
-			Err:        fmt.Errorf("上游返回错误: %s", string(bodyBytes)),
+			Err:        fmt.Errorf("上游返回错误: %s", string(resp.Body)),
 			StatusCode: resp.StatusCode,
 		}
 	}
-
 	// 记录成功
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
 
@@ -1314,13 +1307,17 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 
 	// 处理流式请求
 	if req.Stream {
+		maxRetries := 3
+		if h.retryConfig != nil && h.retryConfig.Enabled {
+			maxRetries = h.retryConfig.MaxAttempts
+		}
+
 		excludeUpstreams := make([]string, 0)
 		var lastErr error
 		var lastStatusCode int
 		var lastErrMsg string
 
-		for attempt := 1; attempt <= maxRetries; attempt++ {
-			// 选择上游模型（排除已失败的上游）
+		for attempt := 1; attempt <= maxRetries; attempt++ { // 选择上游模型（排除已失败的上游）
 			var sel *service.UpstreamSelection
 			var err error
 			if attempt == 1 {
