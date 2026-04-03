@@ -288,9 +288,11 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | `InputTokens` | int | 输入 token 数 |
 | `OutputTokens` | int | 输出 token 数 |
 | `Cost` | int64 | 费用（纳 BU） |
-| `Latency` | int | 延迟(ms) |
+| `Latency` | int | 延迟(ms)，流式请求为 TTFB |
 | `FirstTokenLatency` | int | 首 Token 延迟(ms)，仅流式请求有效 |
+| `TotalDuration` | int | 总耗时(ms)，从请求发起到响应完成 |
 | `Status` | string | 状态：success, error |
+| `UpstreamStatusCode` | int | 上游模型返回的 HTTP 状态码 |
 | `ErrorMessage` | string | 错误信息 |
 | `RequestID` | string | 请求 ID |
 | `CreatedAt` | time.Time | 创建时间 |
@@ -324,7 +326,7 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/v1/chat/completions` | Chat Completions |
+| POST | `/v1/chat/completions` | Chat Completions（支持 `reasoning_content`） |
 | POST | `/v1/completions` | Completions（旧版） |
 | POST | `/v1/embeddings` | Embeddings |
 | GET | `/v1/models` | 模型列表 |
@@ -334,7 +336,7 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/v1/messages` | Messages API |
+| POST | `/v1/messages` | Messages API（支持 `thinking` 内容块） |
 
 ### 4.2 管理 API（JWT 认证）
 
@@ -345,6 +347,7 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | POST | `/api/admin/auth/login` | 登录（无需认证） |
 | POST | `/api/admin/auth/logout` | 登出 |
 | GET | `/api/admin/auth/me` | 当前用户信息 |
+| PUT | `/api/admin/auth/password` | 修改当前用户密码 |
 
 #### 用户管理
 
@@ -664,7 +667,7 @@ JWT + KeyID 认证流程：
 - 支持切换页面后继续在后台处理流式响应
 - 返回聊天页面时自动恢复后台会话状态（消息、流式内容、参数）
 
-### 7.10 思考过程显示
+### 7.11 思考过程显示
 
 管理后台聊天功能支持显示推理模型的思考过程：
 
