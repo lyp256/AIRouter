@@ -88,7 +88,6 @@ health_check:
 |--------|------|--------|------|
 | `jwt_secret` | string | | JWT Token 签名密钥 |
 | `jwt_expire` | duration | `24h` | JWT Token 过期时间 |
-| `admin_token` | string | | 管理 API 访问令牌 |
 
 ### logging — 日志
 
