@@ -182,7 +182,7 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// 选择上游模型（排除已失败的上游）
-		selection, err := h.upstreamSelector.SelectUpstreamWithExclusion(modelCfg.ID, excludeUpstreams)
+		selection, err := h.upstreamSelector.SelectUpstream(modelCfg.ID)
 		if err != nil {
 			if lastErr != nil {
 				// 所有上游都已尝试过，返回最后的错误
@@ -227,7 +227,6 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 				zap.String("upstream_id", selection.Upstream.ID),
 				zap.Int("attempt", attempt))
 			_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-			_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
 			excludeUpstreams[selection.Upstream.ID] = true
 			lastErr = err
 			lastErrMsg = err.Error()
@@ -278,7 +277,6 @@ func (h *ProxyHandler) handleNormalChatWithRetry(c *gin.Context, req *openai.Cha
 
 		// 成功
 		_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
 		var usage openai.Usage
 		var chatResp openai.ChatCompletionResponse
@@ -344,7 +342,6 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 	if err != nil {
 		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
 		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
 		// 记录失败日志
 		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -398,7 +395,6 @@ func (h *ProxyHandler) handleStreamChat(c *gin.Context, client *provider.Client,
 
 	// 记录成功
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
 	// 设置响应头
 	c.Header("Content-Type", "text/event-stream")
@@ -653,7 +649,6 @@ func (h *ProxyHandler) handleNormalCompletion(c *gin.Context, client *provider.C
 	if err != nil {
 		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
 		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
 		// 记录失败日志
 		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -695,7 +690,6 @@ func (h *ProxyHandler) handleNormalCompletion(c *gin.Context, client *provider.C
 
 	// 记录成功
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
 	// 解析响应计算 token
 	var usage openai.Usage
@@ -738,7 +732,6 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 	if err != nil {
 		h.logger.Error("请求上游失败", zap.Error(err), zap.String("request_id", requestID))
 		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
 		// 记录失败日志
 		h.logUsage(c, selection, &modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -792,7 +785,6 @@ func (h *ProxyHandler) handleStreamCompletion(c *gin.Context, client *provider.C
 
 	// 记录成功
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
 	// 设置响应头
 	c.Header("Content-Type", "text/event-stream")
@@ -954,7 +946,6 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("请求上游失败", zap.Error(err))
 		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
 		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
@@ -989,7 +980,6 @@ func (h *ProxyHandler) Embeddings(c *gin.Context) {
 	}
 
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
 	var usage openai.Usage
 	var embResp openai.EmbeddingResponse
@@ -1246,7 +1236,7 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 		if attempt == 1 {
 			sel = selection
 		} else {
-			sel, err = h.upstreamSelector.SelectUpstreamWithExclusion(modelCfg.ID, excludeUpstreams)
+			sel, err = h.upstreamSelector.SelectUpstream(modelCfg.ID)
 			if err != nil {
 				if lastErr != nil {
 					break
@@ -1281,7 +1271,6 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 				zap.String("upstream_id", sel.Upstream.ID),
 				zap.Int("attempt", attempt))
 			_ = h.upstreamSelector.MarkUpstreamError(sel.Upstream.ID)
-			_ = h.upstreamSelector.MarkAPIKeyError(sel.ProviderKey.ID)
 			excludeUpstreams[sel.Upstream.ID] = true
 			lastErr = err
 			lastErrMsg = err.Error()
@@ -1289,7 +1278,6 @@ func (h *ProxyHandler) handleAnthropicNative(c *gin.Context, req *anthropic.Mess
 		}
 
 		_ = h.upstreamSelector.MarkUpstreamSuccess(sel.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeySuccess(sel.ProviderKey.ID)
 
 		// 记录使用日志
 		var usage openai.Usage
@@ -1330,7 +1318,6 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 	if err != nil {
 		h.logger.Error("请求 Anthropic 失败", zap.Error(err), zap.String("request_id", requestID))
 		_ = h.upstreamSelector.MarkUpstreamError(selection.Upstream.ID)
-		_ = h.upstreamSelector.MarkAPIKeyError(selection.ProviderKey.ID)
 		// 记录失败日志
 		h.logUsage(c, selection, modelCfg, &openai.Usage{}, latency, 0, latency, "error", 0, err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -1376,7 +1363,6 @@ func (h *ProxyHandler) handleAnthropicStream(c *gin.Context, client *provider.An
 	}
 
 	_ = h.upstreamSelector.MarkUpstreamSuccess(selection.Upstream.ID)
-	_ = h.upstreamSelector.MarkAPIKeySuccess(selection.ProviderKey.ID)
 
 	// 设置响应头
 	c.Header("Content-Type", "text/event-stream")

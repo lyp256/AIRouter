@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lyp256/airouter/internal/cache"
@@ -34,6 +35,7 @@ type UpstreamSelector struct {
 	encryptor *crypto.Encryptor
 	cache     cache.Cache
 	cacheTTL  time.Duration
+	counters  sync.Map
 }
 
 // NewUpstreamSelector 创建上游模型选择器
@@ -49,32 +51,13 @@ func NewUpstreamSelector(db *gorm.DB, encryptor *crypto.Encryptor, c cache.Cache
 
 // SelectUpstream 选择一个上游模型
 func (s *UpstreamSelector) SelectUpstream(modelID string) (*UpstreamSelection, error) {
-	return s.SelectUpstreamWithExclusion(modelID, nil)
-}
-
-// SelectUpstreamWithExclusion 选择一个上游模型，支持排除指定的上游
-func (s *UpstreamSelector) SelectUpstreamWithExclusion(modelID string, excludeIDs map[string]bool) (*UpstreamSelection, error) {
 	// 获取缓存的上游列表
 	upstreams := s.getUpstreams(modelID)
-
 	if len(upstreams) == 0 {
 		return nil, ErrNoAvailableUpstream
 	}
-
-	// 过滤掉排除的上游
-	var availableUpstreams []*model.Upstream
-	for _, u := range upstreams {
-		if excludeIDs == nil || !excludeIDs[u.ID] {
-			availableUpstreams = append(availableUpstreams, u)
-		}
-	}
-
-	if len(availableUpstreams) == 0 {
-		return nil, ErrNoAvailableUpstream
-	}
-
 	// 按优先级和权重选择
-	upstream := s.selectByWeight(availableUpstreams)
+	upstream := s.selectByWeight(upstreams)
 	if upstream == nil {
 		return nil, ErrNoAvailableUpstream
 	}
@@ -153,7 +136,7 @@ func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream) *model.Up
 		return nil
 	}
 
-	// 按权重随机选择
+	// 按权重计算总和
 	totalWeight := 0
 	for _, u := range activeUpstreams {
 		totalWeight += u.Weight
@@ -163,13 +146,20 @@ func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream) *model.Up
 		return activeUpstreams[0]
 	}
 
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	n := r.Intn(totalWeight)
+	// 按 model_id 区分计数器
+	modelID := activeUpstreams[0].ModelID
+	counterVal, _ := s.counters.LoadOrStore(modelID, new(uint64))
+	counter := counterVal.(*uint64)
+
+	// 原子递增并计算当前权重偏移量
+	count := atomic.AddUint64(counter, 1) - 1
+	n := int(count % uint64(totalWeight))
+
 	for _, u := range activeUpstreams {
-		n -= u.Weight
-		if n < 0 {
+		if n < u.Weight {
 			return u
 		}
+		n -= u.Weight
 	}
 
 	return activeUpstreams[0]
@@ -219,40 +209,6 @@ func (s *UpstreamSelector) MarkUpstreamSuccess(upstreamID string) error {
 	health.LastCheckTime = time.Now()
 
 	return SetUpstreamHealthToCache(s.cache, upstreamID, health)
-}
-
-// MarkAPIKeyError 标记供应商密钥错误
-func (s *UpstreamSelector) MarkAPIKeyError(apiKeyID string) error {
-	now := time.Now()
-	err := s.db.Model(&model.ProviderKey{}).
-		Where("id = ?", apiKeyID).
-		Updates(map[string]interface{}{
-			"last_error_at": now,
-			"status":        "error",
-		}).Error
-	if err != nil {
-		return err
-	}
-	// 清除密钥缓存
-	_ = s.cache.Delete(context.Background(), fmt.Sprintf("provider_key:%s", apiKeyID))
-	return nil
-}
-
-// MarkAPIKeySuccess 标记供应商密钥成功
-func (s *UpstreamSelector) MarkAPIKeySuccess(apiKeyID string) error {
-	now := time.Now()
-	err := s.db.Model(&model.ProviderKey{}).
-		Where("id = ?", apiKeyID).
-		Updates(map[string]interface{}{
-			"last_used_at": now,
-			"status":       "active",
-		}).Error
-	if err != nil {
-		return err
-	}
-	// 清除密钥缓存，下次请求获取最新状态
-	_ = s.cache.Delete(context.Background(), fmt.Sprintf("provider_key:%s", apiKeyID))
-	return nil
 }
 
 // UpdateQuotaUsed 更新已使用配额
