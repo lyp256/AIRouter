@@ -19,7 +19,6 @@ database:
 
 # 安全配置
 security:
-  encryption_key: "your-32-byte-encryption-key-here"  # 32 字节 AES-GCM 加密密钥（必填，用于加密 API Key）
   jwt_secret: "your-jwt-secret-key-change-me"         # JWT 签名密钥
   jwt_expire: "24h"                                    # JWT Token 过期时间
   admin_token: "your-admin-token-change-me"            # 管理 API 访问令牌

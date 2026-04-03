@@ -11,6 +11,7 @@ import (
 
 	"github.com/lyp256/airouter/internal/config"
 	"github.com/qianbin/directcache"
+	"golang.org/x/sync/singleflight"
 )
 
 // cacheEntry 带过期时间的缓存条目
@@ -24,6 +25,7 @@ type memoryCache struct {
 	client *directcache.Cache
 	ttl    time.Duration
 	mu     sync.Mutex
+	sf     singleflight.Group
 }
 
 func newMemoryCache(cfg *config.CacheConfig) (*memoryCache, error) {
@@ -158,48 +160,52 @@ func (m *memoryCache) Once(_ context.Context, key string, value interface{}, ttl
 		m.client.Del([]byte(key))
 	}
 
-	// 使用互斥锁防止缓存击穿（同一个 key 只允许一个请求加载）
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 双重检查：获取锁后再查一次缓存
-	data, ok = m.client.Get([]byte(key))
-	if ok {
-		var entry cacheEntry
-		if err := json.Unmarshal(data, &entry); err == nil {
-			if time.Now().Before(entry.ExpireAt) {
-				if err := json.Unmarshal(entry.Data, value); err == nil {
-					return nil
+	// 使用 singleflight 防止缓存击穿（同一个 key 只允许一个请求加载）
+	res, err, _ := m.sf.Do(key, func() (interface{}, error) {
+		// 双重检查：获取 sf 锁后再查一次缓存（可能其他请求刚填补了缓存）
+		data, ok = m.client.Get([]byte(key))
+		if ok {
+			var entry cacheEntry
+			if err := json.Unmarshal(data, &entry); err == nil {
+				if time.Now().Before(entry.ExpireAt) {
+					return entry.Data, nil
 				}
 			}
+			m.client.Del([]byte(key))
 		}
-		m.client.Del([]byte(key))
-	}
 
-	// 缓存未命中，执行加载函数
-	result, err := do()
+		// 缓存未命中，执行加载函数
+		result, err := do()
+		if err != nil {
+			return nil, err
+		}
+
+		// 序列化结果
+		resultData, err := json.Marshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("缓存序列化失败: %w", err)
+		}
+
+		// 存入缓存
+		entry := cacheEntry{
+			Data:     resultData,
+			ExpireAt: time.Now().Add(ttl),
+		}
+		entryData, err := json.Marshal(entry)
+		if err != nil {
+			return nil, fmt.Errorf("缓存序列化失败: %w", err)
+		}
+		m.client.Set([]byte(key), entryData)
+
+		return resultData, nil
+	})
+
 	if err != nil {
 		return err
 	}
 
-	// 序列化并缓存
-	resultData, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Errorf("缓存序列化失败: %w", err)
-	}
-
-	entry := cacheEntry{
-		Data:     resultData,
-		ExpireAt: time.Now().Add(ttl),
-	}
-	entryData, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("缓存序列化失败: %w", err)
-	}
-	m.client.Set([]byte(key), entryData)
-
-	// 将结果赋值给 value
-	return assignValue(value, result)
+	// 将结果反序列化到 value
+	return json.Unmarshal(res.([]byte), value)
 }
 
 // assignValue 将 src 的值赋给 dst（dst 必须是指针）

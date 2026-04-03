@@ -6,14 +6,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lyp256/airouter/internal/cache"
-	"github.com/lyp256/airouter/internal/crypto"
 	"gorm.io/gorm"
 )
 
 // AuthSelectorConfig 认证选择器配置
 type AuthSelectorConfig struct {
 	DB        *gorm.DB
-	Encryptor *crypto.Encryptor
 	JWTConfig JWTConfig
 	Cache     cache.Cache
 }

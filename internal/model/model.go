@@ -28,8 +28,8 @@ func (User) TableName() string {
 type UserKey struct {
 	ID          string         `gorm:"primaryKey;size:36" json:"id"`
 	Name        string         `gorm:"size:128;not null" json:"name"`
-	Key         string         `gorm:"size:256;not null" json:"-"` // 用户 API Key，加密存储
-	UserID      string         `gorm:"index;size:36;not null" json:"user_id"`
+	Key         string         `gorm:"size:256;not null" json:"-"` // 用户 API Key
+	UserID      string         `gorm:"size:64;not null;index" json:"user_id"`
 	Permissions string         `gorm:"type:text" json:"permissions"` // JSON 数组：models:*, models:gpt-4
 	RateLimit   int            `gorm:"default:60" json:"rate_limit"` // 请求/分钟
 	QuotaLimit  int64          `gorm:"default:0" json:"quota_limit"` // 配额限制
@@ -71,7 +71,7 @@ type ProviderKey struct {
 	ID          string         `gorm:"primaryKey;size:36" json:"id"`
 	ProviderID  string         `gorm:"index;size:36;not null" json:"provider_id"`
 	Name        string         `gorm:"size:128;not null" json:"name"`        // 密钥名称/标识
-	Key         string         `gorm:"size:256;not null" json:"-"`           // 加密存储的 API Key
+	Key         string         `gorm:"size:256;not null" json:"-"`           // API Key
 	Status      string         `gorm:"size:16;default:active" json:"status"` // active, disabled, error
 	QuotaLimit  int64          `gorm:"default:0" json:"quota_limit"`         // 配额限制
 	QuotaUsed   int64          `gorm:"default:0" json:"quota_used"`          // 已使用配额

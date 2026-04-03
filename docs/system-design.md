@@ -494,7 +494,7 @@ airouter/
 │   │       ├── permission.go      # 权限中间件
 │   │       ├── ratelimit.go       # 限流
 │   │       └── common.go          # 通用中间件
-│   └── crypto/crypto.go           # AES-GCM 加密
+│   └── store/sqlite/sqlite.go     # SQLite 数据库
 ├── pkg/
 │   ├── openai/types.go            # OpenAI 协议类型
 │   └── anthropic/types.go         # Anthropic 协议类型
@@ -619,12 +619,7 @@ web/
 - `storageToDisplay(storageValue)` - 存储（纳 BU/K）转显示（BU/M）
 - `displayToStorage(displayValue)` - 显示（BU/M）转存储（纳 BU/K）
 
-### 7.7 加密存储 (crypto.go)
-
-- AES-GCM 加密算法
-- API Key 加密存储
-
-### 7.8 混合认证机制 (apikey.go)
+### 7.7 混合认证机制 (apikey.go)
 
 对外 API 支持两种认证方式：
 - **API Key 认证**：传统方式，直接使用 `Authorization: Bearer <api_key>`
@@ -706,7 +701,6 @@ database:
   path: "./data/airouter.db"
 
 security:
-  encryption_key: "your-32-byte-encryption-key!!"  # 32字节 AES 加密密钥
   jwt_secret: "your-jwt-secret-key"                # JWT 签名密钥
   jwt_expire: "24h"
 
@@ -760,9 +754,9 @@ health_check:
 ## 10. 开发注意事项
 
 1. **安全性**
-   - API Key 使用 AES-GCM 加密存储
    - 用户密码使用 bcrypt 加密
    - 管理 API 使用 JWT 认证
+   - API Key 在数据库中存储，响应中掩码处理
 
 2. **可扩展性**
    - 供应商适配器采用插件式设计

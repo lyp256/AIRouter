@@ -8,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lyp256/airouter/internal/api/middleware"
-	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/model"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -16,13 +15,12 @@ import (
 
 // UserHandler 用户处理器
 type UserHandler struct {
-	db        *gorm.DB
-	encryptor *crypto.Encryptor
+	db *gorm.DB
 }
 
 // NewUserHandler 创建用户处理器
-func NewUserHandler(db *gorm.DB, encryptor *crypto.Encryptor) *UserHandler {
-	return &UserHandler{db: db, encryptor: encryptor}
+func NewUserHandler(db *gorm.DB) *UserHandler {
+	return &UserHandler{db: db}
 }
 
 // ListUsers 列出用户
@@ -316,16 +314,11 @@ func (h *UserHandler) CreateUserKey(c *gin.Context) {
 
 	// 生成 API Key
 	rawKey := generateAPIKey()
-	encryptedKey, err := h.encryptor.Encrypt(rawKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "密钥加密失败"})
-		return
-	}
 
 	key := model.UserKey{
 		ID:          uuid.New().String(),
 		Name:        req.Name,
-		Key:         encryptedKey,
+		Key:         rawKey,
 		UserID:      req.UserID,
 		Permissions: req.Permissions,
 		RateLimit:   req.RateLimit,
@@ -477,15 +470,10 @@ func (h *UserHandler) RegenerateUserKey(c *gin.Context) {
 
 	// 生成新的 API Key
 	rawKey := generateAPIKey()
-	encryptedKey, err := h.encryptor.Encrypt(rawKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "密钥加密失败"})
-		return
-	}
 
 	// 更新密钥
 	if err := h.db.Model(&key).Updates(map[string]interface{}{
-		"key":        encryptedKey,
+		"key":        rawKey,
 		"updated_at": time.Now(),
 	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})

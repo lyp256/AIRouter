@@ -11,7 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/lyp256/airouter/internal/cache"
-	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/model"
 	"gorm.io/gorm"
 )
@@ -19,32 +18,29 @@ import (
 // APIKeyAuthConfig API Key 认证中间件配置
 type APIKeyAuthConfig struct {
 	DB        *gorm.DB
-	Encryptor *crypto.Encryptor
 	JWTConfig JWTConfig
 	Cache     cache.Cache
 }
 
 // userKeyCacheData 用户密钥缓存数据
 type userKeyCacheData struct {
-	KeyID     string `json:"key_id"`
-	UserID    string `json:"user_id"`
-	KeyHash   string `json:"key_hash"`
-	Decrypted string `json:"decrypted"`
+	KeyID   string `json:"key_id"`
+	UserID  string `json:"user_id"`
+	KeyHash string `json:"key_hash"`
+	RawKey  string `json:"raw_key"`
 }
 
 // APIKeyAuthenticator API Key 认证器（带缓存）
 type APIKeyAuthenticator struct {
-	db        *gorm.DB
-	encryptor *crypto.Encryptor
-	cache     cache.Cache
+	db    *gorm.DB
+	cache cache.Cache
 }
 
 // NewAPIKeyAuthenticator 创建 API Key 认证器
-func NewAPIKeyAuthenticator(db *gorm.DB, encryptor *crypto.Encryptor, c cache.Cache) *APIKeyAuthenticator {
+func NewAPIKeyAuthenticator(db *gorm.DB, c cache.Cache) *APIKeyAuthenticator {
 	return &APIKeyAuthenticator{
-		db:        db,
-		encryptor: encryptor,
-		cache:     c,
+		db:    db,
+		cache: c,
 	}
 }
 
@@ -67,7 +63,7 @@ func (a *APIKeyAuthenticator) Authenticate(apiKey string) (*model.UserKey, error
 	}
 
 	// 验证原始 key 是否匹配（双重验证）
-	if cacheData.Decrypted != apiKey {
+	if cacheData.RawKey != apiKey {
 		return nil, nil
 	}
 
@@ -99,17 +95,13 @@ func (a *APIKeyAuthenticator) loadKeyByHash(targetHash string) (*userKeyCacheDat
 
 	// 同时缓存所有密钥的 hash 映射
 	for i := range userKeys {
-		decryptedKey, err := a.encryptor.Decrypt(userKeys[i].Key)
-		if err != nil {
-			continue
-		}
-
-		keyHash := sha256Hash(decryptedKey)
+		rawKey := userKeys[i].Key
+		keyHash := sha256Hash(rawKey)
 		data := &userKeyCacheData{
-			KeyID:     userKeys[i].ID,
-			UserID:    userKeys[i].UserID,
-			KeyHash:   keyHash,
-			Decrypted: decryptedKey,
+			KeyID:   userKeys[i].ID,
+			UserID:  userKeys[i].UserID,
+			KeyHash: keyHash,
+			RawKey:  rawKey,
 		}
 
 		// 缓存每个密钥的 hash 映射
@@ -137,7 +129,7 @@ func sha256Hash(s string) string {
 // 2. JWT + KeyID 认证: Authorization: Bearer <jwt_token>, X-Key-ID: <key_id>
 func APIKeyAuth(cfg APIKeyAuthConfig) gin.HandlerFunc {
 	// 创建认证器
-	authenticator := NewAPIKeyAuthenticator(cfg.DB, cfg.Encryptor, cfg.Cache)
+	authenticator := NewAPIKeyAuthenticator(cfg.DB, cfg.Cache)
 
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")

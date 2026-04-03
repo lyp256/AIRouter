@@ -38,7 +38,7 @@ make web-build    # 构建前端生产版本
 
 **Provider（供应商）**: name, type, base_url, api_path, enabled
 
-**ProviderKey（供应商密钥）**: provider_id, name, key（加密）, status, quota_limit
+**ProviderKey（供应商密钥）**: provider_id, name, key, status, quota_limit
 
 **Model（对外模型）**: name, provider_type, description, input_price, output_price, context_window, enabled
 - `provider_type` 为必填字段，可选值：openai, anthropic, openai_compatible
@@ -50,7 +50,7 @@ make web-build    # 构建前端生产版本
 - 健康状态（active/error）存储在缓存中，不写入数据库
 - 缓存 key: `upstream:health:{upstreamID}`，TTL 1 小时，缓存未命中视为健康
 
-**UserKey（用户密钥）**: user_id, key（加密）, rate_limit, quota_limit, status
+**UserKey（用户密钥）**: user_id, key, rate_limit, quota_limit, status
 
 **UsageLog（使用日志）**: user_id, user_key_id, upstream_id, provider_key_id, model, input_tokens, output_tokens, cost, latency, status
 - 使用 ID 关联外部数据，通过 JOIN 查询获取完整信息
@@ -72,7 +72,6 @@ make web-build    # 构建前端生产版本
 
 ## 开发规范
 
-- API Key 存储使用 AES-GCM 加密
 - 上游模型选择支持权重和优先级，健康状态过滤通过缓存判断
 - 上游健康检查服务（`internal/service/upstream_health.go`）支持两级检查：
   - 全量检查（默认 5 分钟）：检查所有启用的上游

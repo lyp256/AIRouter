@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/lyp256/airouter/internal/cache"
-	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/model"
 	"gorm.io/gorm"
 )
@@ -23,41 +22,39 @@ var (
 
 // UpstreamSelection 上游模型选择结果
 type UpstreamSelection struct {
-	Upstream     *model.Upstream
-	Provider     *model.Provider
-	ProviderKey  *model.ProviderKey
-	DecryptedKey string
+	Upstream    *model.Upstream
+	Provider    *model.Provider
+	ProviderKey *model.ProviderKey
+	RawKey      string
 }
 
 // UpstreamSelector 上游模型选择器
 type UpstreamSelector struct {
-	db        *gorm.DB
-	encryptor *crypto.Encryptor
-	cache     cache.Cache
-	cacheTTL  time.Duration
-	counters  sync.Map
+	db       *gorm.DB
+	cache    cache.Cache
+	cacheTTL time.Duration
+	counters sync.Map
 }
 
 // NewUpstreamSelector 创建上游模型选择器
-func NewUpstreamSelector(db *gorm.DB, encryptor *crypto.Encryptor, c cache.Cache) *UpstreamSelector {
+func NewUpstreamSelector(db *gorm.DB, c cache.Cache) *UpstreamSelector {
 	ttl := 10 * time.Minute
 	return &UpstreamSelector{
-		db:        db,
-		encryptor: encryptor,
-		cache:     c,
-		cacheTTL:  ttl,
+		db:       db,
+		cache:    c,
+		cacheTTL: ttl,
 	}
 }
 
 // SelectUpstream 选择一个上游模型
-func (s *UpstreamSelector) SelectUpstream(modelID string) (*UpstreamSelection, error) {
+func (s *UpstreamSelector) SelectUpstream(modelID string, excludeIDs ...string) (*UpstreamSelection, error) {
 	// 获取缓存的上游列表
 	upstreams := s.getUpstreams(modelID)
 	if len(upstreams) == 0 {
 		return nil, ErrNoAvailableUpstream
 	}
 	// 按优先级和权重选择
-	upstream := s.selectByWeight(upstreams)
+	upstream := s.selectByWeight(upstreams, excludeIDs...)
 	if upstream == nil {
 		return nil, ErrNoAvailableUpstream
 	}
@@ -88,17 +85,11 @@ func (s *UpstreamSelector) SelectUpstream(modelID string) (*UpstreamSelection, e
 		return nil, err
 	}
 
-	// 解密密钥
-	decryptedKey, err := s.encryptor.Decrypt(apiKey.Key)
-	if err != nil {
-		return nil, err
-	}
-
 	return &UpstreamSelection{
-		Upstream:     upstream,
-		Provider:     &provider,
-		ProviderKey:  &apiKey,
-		DecryptedKey: decryptedKey,
+		Upstream:    upstream,
+		Provider:    &provider,
+		ProviderKey: &apiKey,
+		RawKey:      apiKey.Key,
 	}, nil
 }
 
@@ -119,11 +110,17 @@ func (s *UpstreamSelector) getUpstreams(modelID string) []*model.Upstream {
 }
 
 // selectByWeight 根据权重选择上游模型
-func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream) *model.Upstream {
-	// 过滤出活跃状态的上游模型（从缓存检查健康状态）
+func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream, excludeIDs ...string) *model.Upstream {
+	// 转换为 map 方便查找
+	excluded := make(map[string]bool)
+	for _, id := range excludeIDs {
+		excluded[id] = true
+	}
+
+	// 过滤出活跃状态且不在排除列表中的上游模型
 	activeUpstreams := make([]*model.Upstream, 0, len(upstreams))
 	for _, u := range upstreams {
-		if !u.Enabled {
+		if !u.Enabled || excluded[u.ID] {
 			continue
 		}
 		// 从缓存检查健康状态（缓存未命中 = 健康）
@@ -235,16 +232,11 @@ func (s *UpstreamSelector) GetUpstreamSelection(upstreamID string) (*UpstreamSel
 		return nil, fmt.Errorf("供应商密钥不存在: %w", err)
 	}
 
-	decryptedKey, err := s.encryptor.Decrypt(apiKey.Key)
-	if err != nil {
-		return nil, fmt.Errorf("解密密钥失败: %w", err)
-	}
-
 	return &UpstreamSelection{
-		Upstream:     &upstream,
-		Provider:     &provider,
-		ProviderKey:  &apiKey,
-		DecryptedKey: decryptedKey,
+		Upstream:    &upstream,
+		Provider:    &provider,
+		ProviderKey: &apiKey,
+		RawKey:      apiKey.Key,
 	}, nil
 }
 

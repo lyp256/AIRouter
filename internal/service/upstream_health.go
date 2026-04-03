@@ -11,7 +11,6 @@ import (
 
 	"github.com/lyp256/airouter/internal/cache"
 	"github.com/lyp256/airouter/internal/config"
-	"github.com/lyp256/airouter/internal/crypto"
 	"github.com/lyp256/airouter/internal/model"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -47,7 +46,6 @@ type leaderInfo struct {
 // UpstreamHealthCheckService 上游健康检查服务
 type UpstreamHealthCheckService struct {
 	db         *gorm.DB
-	encryptor  *crypto.Encryptor
 	cache      cache.Cache
 	cfg        *config.HealthCheckConfig
 	logger     *zap.Logger
@@ -62,7 +60,6 @@ type UpstreamHealthCheckService struct {
 // NewUpstreamHealthCheckService 创建上游健康检查服务
 func NewUpstreamHealthCheckService(
 	db *gorm.DB,
-	encryptor *crypto.Encryptor,
 	c cache.Cache,
 	cfg *config.HealthCheckConfig,
 	logger *zap.Logger,
@@ -70,7 +67,6 @@ func NewUpstreamHealthCheckService(
 	instanceID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Nanosecond())
 	return &UpstreamHealthCheckService{
 		db:         db,
-		encryptor:  encryptor,
 		cache:      c,
 		cfg:        cfg,
 		logger:     logger,
@@ -336,15 +332,9 @@ func (s *UpstreamHealthCheckService) probeUpstream(ctx context.Context, provider
 		return &probeResult{success: false, errorMessage: fmt.Sprintf("密钥不存在: %s", providerKeyID)}
 	}
 
-	// 解密密钥
-	decryptedKey, err := s.encryptor.Decrypt(apiKey.Key)
-	if err != nil {
-		return &probeResult{success: false, errorMessage: "解密密钥失败"}
-	}
-
 	// 发送探测请求
 	start := time.Now()
-	err = s.doHealthCheck(ctx, provider.BaseURL, decryptedKey)
+	err := s.doHealthCheck(ctx, provider.BaseURL, apiKey.Key)
 	responseMs := time.Since(start).Milliseconds()
 
 	if err != nil {
