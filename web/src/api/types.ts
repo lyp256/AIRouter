@@ -11,6 +11,7 @@ export interface User {
 export interface UserKey {
   id: string
   name: string
+  key: string
   user_id: string
   permissions: string
   rate_limit: number
@@ -80,14 +81,13 @@ export interface UpstreamTestResult {
 }
 
 // Model 对外大模型
-// 移除了 provider_id, provider_model, api_path 字段（通过 Upstream 关联）
+// 移除了 provider_id, provider_model, provider_type, api_path 字段（通过 Upstream 关联）
 export interface Model {
   id: string
   name: string
-  provider_type: string // 供应商类型：openai, anthropic, openai_compatible（必填，创建后不可修改）
   description: string
-  input_price: number  // 输入价格（纳 BU/1K token）
-  output_price: number // 输出价格（纳 BU/1K token）
+  input_price: number  // 输入价格（nano credits/1K token）
+  output_price: number // 输出价格（nano credits/1K token）
   context_window: number
   enabled: boolean
   created_at: string
@@ -108,12 +108,13 @@ export interface UsageLog {
   upstream_id: string
   provider_key_id: string
   model: string
+  protocol?: string // 日志记录的客户端调用协议
   provider_type?: string // 关联查询：协议类型
   provider_model?: string // 关联查询：供应商模型
   provider_name?: string // 关联查询：供应商名称
   input_tokens: number
   output_tokens: number
-  cost: number // 费用（纳 BU）
+  cost: number // 费用（nano credits）
   latency: number
   first_token_latency: number // 首Token延迟(ms)，仅流式请求有效
   total_duration: number // 总耗时(ms)，从请求发起到响应完成
@@ -150,7 +151,7 @@ export interface ChatMessage {
   content: string
   reasoning_content?: string // 思考内容（DeepSeek R1 等）
   modelName?: string      // 模型名称
-  providerType?: string   // 协议类型：openai | anthropic | openai_compatible
+  isError?: boolean       // 前端展示用错误消息，不作为聊天上下文发送
 }
 
 export interface ChatRequest {
@@ -190,7 +191,6 @@ export interface OpenAIModelInfo {
   object: string
   created: number
   owned_by: string
-  provider_type?: string // 供应商类型：openai, anthropic, openai_compatible
 }
 
 export interface OpenAIModelsResponse {

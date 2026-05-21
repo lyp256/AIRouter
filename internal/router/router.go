@@ -54,7 +54,6 @@ func Setup(cfg *config.Config, db *gorm.DB, logger *zap.Logger, cacheInstance ca
 	setupV1Routes(router, authSelector, rateLimiter, handlers.Proxy)
 	setupAuthRoutes(router, authSelector, handlers.Auth)
 	setupAdminRoutes(router, authSelector, requireAdmin, handlers)
-	setupHealthRoute(router)
 	setupStaticRoutes(router, logger)
 
 	return router
@@ -67,10 +66,9 @@ func setupV1Routes(router *gin.Engine, authSelector gin.HandlerFunc, rateLimiter
 	v1.Use(middleware.RateLimitByUserKey(rateLimiter))
 	{
 		v1.POST("/chat/completions", proxy.ChatCompletions)
-		v1.POST("/completions", proxy.Completions)
+		v1.POST("/responses", proxy.Responses)
 		v1.POST("/messages", proxy.AnthropicMessages)
 		v1.GET("/models", proxy.Models)
-		v1.POST("/embeddings", proxy.Embeddings)
 	}
 }
 
@@ -119,7 +117,6 @@ func setupAdminRoutes(router *gin.Engine, authSelector gin.HandlerFunc, requireA
 		api.PUT("/upstreams/:id", requireAdmin, handlers.Model.UpdateUpstream)
 		api.DELETE("/upstreams/:id", requireAdmin, handlers.Model.DeleteUpstream)
 		api.POST("/upstreams/:id/toggle", requireAdmin, handlers.Model.ToggleUpstream)
-		api.POST("/upstreams/:id/reset-status", requireAdmin, handlers.Model.ResetUpstreamStatus)
 		api.POST("/upstreams/:id/test", requireAdmin, handlers.Model.TestUpstream)
 		api.POST("/models/:id/test-upstreams", requireAdmin, handlers.Model.TestModelUpstreams)
 
@@ -148,13 +145,6 @@ func setupAdminRoutes(router *gin.Engine, authSelector gin.HandlerFunc, requireA
 		api.GET("/stats/logs", requireAdmin, handlers.Stats.UsageLogList)
 		api.GET("/stats/filter-options", requireAdmin, handlers.Stats.GetFilterOptions)
 	}
-}
-
-// setupHealthRoute 注册健康检查路由
-func setupHealthRoute(router *gin.Engine) {
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
 }
 
 // setupStaticRoutes 注册静态文件服务路由

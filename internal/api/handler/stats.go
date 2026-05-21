@@ -29,6 +29,7 @@ type UsageLogResponse struct {
 	UpstreamID         string `json:"upstream_id"`
 	ProviderKeyID      string `json:"provider_key_id"`
 	Model              string `json:"model"`
+	Protocol           string `json:"protocol"`
 	ProviderType       string `json:"provider_type"`
 	ProviderModel      string `json:"provider_model"`
 	ProviderName       string `json:"provider_name"`
@@ -49,7 +50,7 @@ type UsageLogResponse struct {
 type DashboardStats struct {
 	TodayRequests int64   `json:"today_requests"`
 	TodayTokens   int64   `json:"today_tokens"`
-	TodayCost     int64   `json:"today_cost"` // 今日消费（纳 BU）
+	TodayCost     int64   `json:"today_cost"` // 今日消费（nano credits）
 	ActiveUsers   int64   `json:"active_users"`
 	ActiveKeys    int64   `json:"active_keys"`
 	SuccessRate   float64 `json:"success_rate"`
@@ -114,7 +115,7 @@ type UsageTrend struct {
 	Date     string `json:"date"`
 	Requests int64  `json:"requests"`
 	Tokens   int64  `json:"tokens"`
-	Cost     int64  `json:"cost"` // 费用（纳 BU）
+	Cost     int64  `json:"cost"` // 费用（nano credits）
 }
 
 // GetUsageTrend 获取使用趋势
@@ -172,7 +173,7 @@ type ModelStats struct {
 	Model    string `json:"model"`
 	Requests int64  `json:"requests"`
 	Tokens   int64  `json:"tokens"`
-	Cost     int64  `json:"cost"` // 费用（纳 BU）
+	Cost     int64  `json:"cost"` // 费用（nano credits）
 }
 
 // GetModelStats 获取模型使用统计
@@ -207,7 +208,7 @@ type UserStats struct {
 	Username   string `json:"username"`
 	Requests   int64  `json:"requests"`
 	Tokens     int64  `json:"tokens"`
-	Cost       int64  `json:"cost"` // 费用（纳 BU）
+	Cost       int64  `json:"cost"` // 费用（nano credits）
 	LastUsedAt string `json:"last_used_at"`
 }
 
@@ -268,8 +269,11 @@ func (h *StatsHandler) UsageLogList(c *gin.Context) {
 		if modelName := c.Query("model"); modelName != "" {
 			q = q.Where("ul.model = ?", modelName)
 		}
+		if protocol := c.Query("protocol"); protocol != "" {
+			q = q.Where("COALESCE(NULLIF(ul.protocol, ''), NULLIF(ul.provider_type, ''), p.type) = ?", protocol)
+		}
 		if providerType := c.Query("provider_type"); providerType != "" {
-			q = q.Where("m.provider_type = ?", providerType)
+			q = q.Where("COALESCE(NULLIF(ul.protocol, ''), NULLIF(ul.provider_type, ''), p.type) = ?", providerType)
 		}
 		if providerName := c.Query("provider_name"); providerName != "" {
 			q = q.Where("p.name = ?", providerName)
@@ -299,7 +303,10 @@ func (h *StatsHandler) UsageLogList(c *gin.Context) {
 	var logs []UsageLogResponse
 	applyFilters(filterBase()).
 		Select(`ul.id, ul.user_id, u.username, ul.user_key_id, ul.upstream_id,
-				ul.provider_key_id, ul.model, m.provider_type, up.provider_model,
+				ul.provider_key_id, ul.model,
+				COALESCE(NULLIF(ul.protocol, ''), NULLIF(ul.provider_type, ''), p.type) as protocol,
+				COALESCE(NULLIF(ul.provider_type, ''), p.type) as provider_type,
+				up.provider_model,
 				p.name as provider_name, ul.input_tokens, ul.output_tokens, ul.cost,
 				ul.latency, ul.first_token_latency, ul.total_duration, ul.status,
 				ul.upstream_status_code, ul.error_message,
@@ -346,13 +353,19 @@ func (h *StatsHandler) GetFilterOptions(c *gin.Context) {
 		Where("ul.model != ''").
 		Pluck("model", &opts.Models)
 
-	// 获取所有协议类型（通过 JOIN 从 models 表获取）
+	// 获取所有协议类型（优先使用日志记录的真实客户端调用协议）
+	var protocolRows []struct {
+		Protocol string
+	}
 	h.db.Table("usage_logs ul").
 		Joins("LEFT JOIN upstreams up ON ul.upstream_id = up.id").
-		Joins("LEFT JOIN models m ON up.model_id = m.id").
-		Distinct("m.provider_type").
-		Where("m.provider_type IS NOT NULL AND m.provider_type != ''").
-		Pluck("provider_type", &opts.ProviderTypes)
+		Joins("LEFT JOIN providers p ON up.provider_id = p.id").
+		Select("DISTINCT COALESCE(NULLIF(ul.protocol, ''), NULLIF(ul.provider_type, ''), p.type) as protocol").
+		Where("COALESCE(NULLIF(ul.protocol, ''), NULLIF(ul.provider_type, ''), p.type) IS NOT NULL AND COALESCE(NULLIF(ul.protocol, ''), NULLIF(ul.provider_type, ''), p.type) != ''").
+		Scan(&protocolRows)
+	for _, row := range protocolRows {
+		opts.ProviderTypes = append(opts.ProviderTypes, row.Protocol)
+	}
 
 	// 获取所有厂商（通过 JOIN 从 providers 表获取）
 	h.db.Table("usage_logs ul").

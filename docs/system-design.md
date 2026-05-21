@@ -78,7 +78,6 @@ AIRouter 是一个大模型 API 统一代理系统，提供以下核心能力：
 |---------|---------|------|
 | `/v1/*` | API Key | 对外 API |
 | `/api/admin/*` | JWT | 管理 API |
-| `/health` | 无需认证 | 健康检查 |
 
 ### 2.3 权限控制
 
@@ -235,28 +234,28 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 |------|------|------|
 | `ID` | string | 模型 ID |
 | `Name` | string | 模型名称（对外展示） |
-| `ProviderType` | string | 供应商类型：openai, anthropic, openai_compatible（必填，创建后不可修改） |
 | `Description` | string | 模型描述 |
-| `InputPrice` | int64 | 输入价格（纳 BU/1K tokens） |
-| `OutputPrice` | int64 | 输出价格（纳 BU/1K tokens） |
+| `InputPrice` | int64 | 输入价格（nano credits/1K tokens） |
+| `OutputPrice` | int64 | 输出价格（nano credits/1K tokens） |
 | `ContextWindow` | int | 上下文窗口大小 |
 | `Enabled` | bool | 是否启用 |
 | `CreatedAt` | time.Time | 创建时间 |
 | `UpdatedAt` | time.Time | 更新时间 |
 
-**唯一约束**：`(Name, ProviderType)` 组合唯一索引，支持同名不同类型的模型。
+**唯一约束**：`Name` 唯一。
 
-**类型约束**：
-- 模型创建时必须指定 `ProviderType`，创建后不可修改
-- 添加上游模型时，供应商类型必须与模型的 `ProviderType` 匹配
+**协议处理**：
+- 对外模型不指定协议类型
+- 协议类型来自上游模型关联的供应商 `type`
+- 请求协议与上游协议不一致时，通过内置转换机制自动转换
 
-**BU 计量单位**：
-- 最小单位：纳 BU（Nano，nBU）
-- 换算关系：1000 纳 = 1 微，1000 微 = 1 毫，1000 毫 = 1 BU
-- 1 BU = 10^9 纳 BU
-- 所有价格、费用、配额字段统一使用 int64 存储纳 BU 值
-- 前端显示单位：BU/M tokens（每百万 token 的价格）
-- 后端存储单位：纳 BU/K tokens（每千 token 的价格，乘以 10^6 得到存储值）
+**credits 计量单位**：
+- 最小单位：nano credits
+- 换算关系：1000 nano credits = 1 microcredit，1000 microcredits = 1 millicredit，1000 millicredits = 1 credit
+- 1 credit = 10^9 nano credits
+- 所有价格、费用、配额字段统一使用 int64 存储 nano credits 值
+- 前端显示单位：credits/M tokens（每百万 token 的价格）
+- 后端存储单位：nano credits/K tokens（每千 token 的价格，乘以 10^6 得到存储值）
 
 ### 3.7 Upstream（上游模型）
 
@@ -287,7 +286,7 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | `Model` | string | 对外模型名称（保留用于索引优化） |
 | `InputTokens` | int | 输入 token 数 |
 | `OutputTokens` | int | 输出 token 数 |
-| `Cost` | int64 | 费用（纳 BU） |
+| `Cost` | int64 | 费用（nano credits） |
 | `Latency` | int | 延迟(ms)，流式请求为 TTFB |
 | `FirstTokenLatency` | int | 首 Token 延迟(ms)，仅流式请求有效 |
 | `TotalDuration` | int | 总耗时(ms)，从请求发起到响应完成 |
@@ -299,7 +298,7 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 
 **关联查询字段**（通过 JOIN 获取）：
 - `Username` - 用户名（来自 users 表）
-- `ProviderType` - 协议类型（来自 models 表）
+- `ProviderType` - 协议类型（来自 providers 表）
 - `ProviderModel` - 供应商模型（来自 upstreams 表）
 - `ProviderName` - 供应商名称（来自 providers 表）
 
@@ -327,7 +326,6 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/v1/chat/completions` | Chat Completions（支持 `reasoning_content`） |
-| POST | `/v1/completions` | Completions（旧版） |
 | POST | `/v1/embeddings` | Embeddings |
 | GET | `/v1/models` | 模型列表 |
 | GET | `/v1/models/{model}` | 模型详情 |
@@ -406,12 +404,12 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | GET | `/api/admin/upstreams` | 上游模型列表 |
 | GET | `/api/admin/upstreams/{id}` | 上游模型详情 |
 | GET | `/api/admin/models/{id}/upstreams` | 模型的上游模型列表 |
-| POST | `/api/admin/models/{id}/upstreams` | 为模型添加上游模型（供应商类型必须匹配） |
+| POST | `/api/admin/models/{id}/upstreams` | 为模型添加上游模型 |
 | PUT | `/api/admin/upstreams/{id}` | 更新上游模型 |
 | DELETE | `/api/admin/upstreams/{id}` | 删除上游模型 |
 | POST | `/api/admin/upstreams/{id}/toggle` | 切换上游模型启用状态 |
 
-**类型匹配约束**：创建上游模型时，供应商的 `type` 必须与模型的 `provider_type` 一致，否则返回 400 错误。
+**协议来源**：创建上游模型时可选择任意供应商，运行时按供应商 `type` 自动选择 OpenAI 或 Anthropic 执行器并进行协议转换。
 
 #### 使用统计
 
@@ -424,14 +422,6 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 | GET | `/api/admin/stats/filter-options` | 筛选选项（模型、协议类型、厂商、供应商密钥、状态） |
 | GET | `/api/admin/stats/logs?model=&provider_type=&provider_name=&provider_key_id=&status=` | 使用日志列表 |
 
-### 4.3 其他
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | 健康检查（无需认证） |
-
----
-
 ## 5. 技术选型
 
 ### 5.1 后端技术栈
@@ -440,7 +430,7 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 |------|------|------|
 | Web 框架 | Gin | 高性能、轻量 |
 | 数据库 | SQLite (默认) / PostgreSQL | SQLite 便于开发，PG 支持生产 |
-| 缓存 | 内存缓存 (可选 Redis) | 上游健康状态、模型配置缓存、分布式选主 |
+| 缓存 | 内存缓存 (可选 Redis) | 模型配置、上游列表、供应商/密钥信息缓存 |
 | 配置 | Viper | 支持多种配置格式 |
 | 日志 | Zap | 结构化日志 |
 | HTTP 客户端 | Resty | 供应商 API 调用 |
@@ -475,7 +465,6 @@ airouter/
 │   ├── store/sqlite/sqlite.go     # SQLite 存储
 │   ├── service/                   # 核心服务
 │   │   ├── upstream_selector.go   # 上游模型选择器
-│   │   ├── upstream_health.go     # 上游健康检查（两级检查 + 分布式选主）
 │   │   ├── retry.go               # 重试服务
 │   │   ├── quota.go               # 配额管理
 │   │   └── metrics.go             # Prometheus 指标
@@ -525,7 +514,7 @@ web/
 │   │   ├── stats.ts               # 使用统计
 │   │   └── types.ts               # 全局类型定义（含 FilterOptions）
 │   ├── utils/
-│   │   └── format.ts              # BU 格式化工具函数
+│   │   └── format.ts              # credits 格式化工具函数
 │   ├── components/
 │   │   └── Sidebar.vue            # 侧边栏
 │   ├── views/                     # 页面
@@ -574,55 +563,27 @@ web/
 - 供应商密钥配额限制
 - 配额检查和告警
 
-### 7.4 上游健康检查 (upstream_health.go)
+### 7.4 credits 计量单位
 
-- 健康状态存储在缓存中（key: `upstream:health:{upstreamID}`），不写入数据库
-- 缓存未命中视为健康（默认 active）
-- 两级检查机制：
-  - **全量检查**（默认 5 分钟间隔）：检查所有启用的上游模型
-  - **恢复检查**（默认 30 秒间隔）：仅检查不健康的上游模型以快速恢复
-- 按 `(providerID, providerKeyID)` 去重，减少重复探测
-- 探测方式：向供应商 `/v1/models` 端点发送 GET 请求，HTTP 429 不算不健康
-- 连续成功/失败次数达到阈值后转换状态
-- 分布式选主：通过缓存 `leader:health-check:full` 和 `leader:health-check:recovery` key 实现
-  - Redis 缓存模式下只有一个实例执行健康检查
-  - 内存缓存模式下各实例独立运行
-- 代理请求失败时即时标记上游为不健康（写入缓存）
-- 代理请求成功时即时恢复健康状态
-
-### 7.5 Prometheus 指标 (metrics.go)
-
-- 请求计数
-- 延迟统计
-- 错误率统计
-
-### 7.6 BU 计量单位 (pkg/bu/bu.go)
-
-系统使用抽象计量单位 BU（Basic Unit），统一表示价格、配额和费用：
+系统使用抽象计量单位 credits，统一表示价格、配额和费用：
 
 **单位定义**：
-- 最小单位：纳 BU（Nano，nBU）
-- 换算关系：1000 纳 = 1 微，1000 微 = 1 毫，1000 毫 = 1 BU
-- 1 BU = 10^9 纳 BU
+- 最小单位：nano credits
+- 换算关系：1000 nano credits = 1 microcredit，1000 microcredits = 1 millicredit，1000 millicredits = 1 credit
+- 1 credit = 10^9 nano credits
 
 **存储与显示**：
-- 后端存储：int64 纳 BU/K tokens（每千 token 价格）
-- 前端显示：BU/M tokens（每百万 token 价格）
+- 后端存储：int64 nano credits/K tokens（每千 token 价格）
+- 前端显示：credits/M tokens（每百万 token 价格）
 - 换算：存储值 × 10^-6 = 显示值
 
-**后端工具函数**：
-- `FromFloat(value float64) int64` - BU 转纳 BU
-- `ToFloat(value int64) float64` - 纳 BU 转 BU
-- `CalculateCost(pricePerK int64, tokens int) int64` - 计算费用
-- `Format(value int64) string` - 格式化显示
-
 **前端工具函数** (`web/src/utils/format.ts`)：
-- `formatBU(nano)` - 格式化 BU 显示（通用，用于成本、消费等）
-- `formatPricePerM(storageValue)` - 格式化价格显示（BU/M tokens）
-- `storageToDisplay(storageValue)` - 存储（纳 BU/K）转显示（BU/M）
-- `displayToStorage(displayValue)` - 显示（BU/M）转存储（纳 BU/K）
+- `formatCredits(nano)` - 格式化 credits 显示（通用，用于成本、消费等）
+- `formatPricePerM(storageValue)` - 格式化价格显示（credits/M tokens）
+- `storageToDisplay(storageValue)` - 存储（nano credits/K）转显示（credits/M）
+- `displayToStorage(displayValue)` - 显示（credits/M）转存储（nano credits/K）
 
-### 7.7 混合认证机制 (apikey.go)
+### 7.6 混合认证机制 (apikey.go)
 
 对外 API 支持两种认证方式：
 - **API Key 认证**：传统方式，直接使用 `Authorization: Bearer <api_key>`
@@ -637,21 +598,22 @@ JWT + KeyID 认证流程：
 
 前端聊天功能使用此机制，用户可选择自己的密钥调用模型。
 
-### 7.9 前端协议自动选择
+### 7.9 协议自动转换
 
-前端聊天页面根据模型的 `provider_type` 自动选择 API 协议：
+前端聊天页面统一使用 OpenAI Chat Completions 入口，后端根据实际选中的上游供应商类型自动转换协议：
 
-| 模型类型 | API 端点 | 协议格式 |
+| 请求入口 | 上游供应商类型 | 处理方式 |
 |---------|---------|---------|
-| `anthropic` | `/v1/messages` | Anthropic Messages API |
-| `openai` | `/v1/chat/completions` | OpenAI Chat Completions API |
-| `openai_compatible` | `/v1/chat/completions` | OpenAI Chat Completions API |
+| `/v1/chat/completions` | `openai` / `openai_compatible` | OpenAI 格式透传 |
+| `/v1/chat/completions` | `anthropic` | OpenAI 请求转换为 Anthropic Messages |
+| `/v1/messages` | `openai` / `openai_compatible` | Anthropic 请求转换为 OpenAI Chat Completions |
+| `/v1/messages` | `anthropic` | Anthropic 格式透传 |
 
 **实现方式**：
-- 管理后台通过 `modelApi.adminList()` 获取完整模型信息（含 `provider_type`）
+- 管理后台通过 `modelApi.adminList()` 获取模型基础信息
 - `/v1/models` 端点返回 OpenAI 兼容格式的模型列表，`modelApi.list()` 直接调用此端点
-- 前端根据当前选中模型的类型，动态选择调用对应的 API 端点
-- 支持 Anthropic 原生协议的流式响应处理
+- 后端选择上游后，根据 Provider `type` 调用现有转换机制
+- 支持 OpenAI 与 Anthropic 原生协议的流式响应处理
 
 ### 7.10 会话管理
 
@@ -723,16 +685,6 @@ admin:
   username: "admin"
   password: "changeme"
   email: "admin@example.com"
-
-health_check:
-  enabled: true
-  full_check_interval: "5m"     # 全量检查间隔
-  recovery_interval: "30s"      # 不健康上游恢复检查间隔
-  timeout: "10s"                # 探测超时
-  healthy_threshold: 2          # 连续成功次数阈值
-  unhealthy_threshold: 3        # 连续失败次数阈值
-  leader_lease: "30s"           # 选主租约时长
-  leader_renew_interval: "10s"  # 选主续约间隔
 ```
 
 ---
@@ -747,9 +699,9 @@ health_check:
 | 阶段四：路由与负载均衡 | ✅ 已完成 | 模型路由、上游模型选择、故障转移、重试 |
 | 阶段五：用户 API 接口 | ✅ 已完成 | OpenAI + Anthropic 协议、流式响应 |
 | 阶段六：管理 API 与前端 | ✅ 已完成 | 完整管理 API、前端页面 |
-| 阶段七：高级功能 | ✅ 已完成 | 统计、配额、健康检查、Prometheus |
+| 阶段七：高级功能 | ✅ 已完成 | 统计、配额、Prometheus |
 | 数据模型重构 | ✅ 已完成 | 引入 Upstream 概念，支持跨供应商负载均衡 |
-| 模型类型属性 | ✅ 已完成 | 模型添加 provider_type 属性，支持同名不同类型模型，上游模型供应商类型约束 |
+| 模型协议解耦 | ✅ 已完成 | 模型不再指定协议类型，协议由上游供应商类型驱动并自动转换 |
 | 阶段八：部署与文档 | ⏸️ 暂缓 | Dockerfile 已完成，其他暂缓 |
 
 ---

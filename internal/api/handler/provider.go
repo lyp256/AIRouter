@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -67,6 +68,11 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
+	req.Type = strings.TrimSpace(req.Type)
+	if !model.IsSupportedProviderType(req.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的供应商类型"})
+		return
+	}
 
 	// 检查名称是否已存在
 	var count int64
@@ -119,6 +125,11 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 	var req UpdateProviderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	req.Type = strings.TrimSpace(req.Type)
+	if req.Type != "" && !model.IsSupportedProviderType(req.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的供应商类型"})
 		return
 	}
 

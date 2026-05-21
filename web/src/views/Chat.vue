@@ -39,10 +39,14 @@ hljs.registerLanguage('yaml', yaml)
 hljs.registerLanguage('shell', shell)
 import { modelApi } from '@/api/model'
 import { userApi } from '@/api/user'
-import { chatStream, anthropicStream, getChatSessions, deleteChatSession, saveChatSession, generateSessionName } from '@/api/chat'
+import { chatStream, chatProtocols, getChatProtocolLabel, getChatSessions, deleteChatSession, saveChatSession, generateSessionName, getContextMessages, type ChatProtocol } from '@/api/chat'
 import type { Model, ChatMessage, UserKey } from '@/api/types'
 import { useChatStore, setChatAbortController, getChatAbortController } from '@/stores/chat'
 import { sanitizeHtml } from '@/utils/sanitize'
+
+function normalizeChatProtocol(protocol?: string): ChatProtocol {
+  return chatProtocols.some(p => p.value === protocol) ? protocol as ChatProtocol : 'openai-chat'
+}
 
 // 配置 marked 使用 highlight.js 语法高亮
 const renderer = {
@@ -75,6 +79,7 @@ const models = ref<Model[]>([])
 const currentModelId = ref('') // 当前选中的模型 ID
 const userKeys = ref<UserKey[]>([])
 const selectedKeyId = ref('')
+const selectedProtocol = ref<ChatProtocol>('openai-chat')
 const messages = ref<ChatMessage[]>([])
 const inputMessage = ref('')
 const isLoading = ref(false)
@@ -97,6 +102,7 @@ const expandedReasoning = ref<Set<number>>(new Set())
 // 会话管理
 const sessions = ref(getChatSessions())
 const currentSessionId = ref<string | null>(null)
+const inputDrafts = ref<Map<string, string>>(new Map())
 
 // 设置参数
 const temperature = ref(0.7)
@@ -111,9 +117,11 @@ const currentModel = computed(() => {
   return models.value.find(m => m.id === currentModelId.value)
 })
 
-// 计算当前模型的供应商类型
-const currentProviderType = computed(() => {
-  return currentModel.value?.provider_type || 'openai'
+const activeBackgroundSessionId = computed(() => chatStore.backgroundSession?.sessionId || null)
+const isCurrentSessionStreaming = computed(() => !!activeBackgroundSessionId.value && activeBackgroundSessionId.value === currentSessionId.value)
+const hasOtherStreamingSession = computed(() => !!activeBackgroundSessionId.value && activeBackgroundSessionId.value !== currentSessionId.value)
+const canSend = computed(() => {
+  return !!inputMessage.value.trim() && !!currentModelId.value && !!selectedKeyId.value && !isLoading.value && !hasOtherStreamingSession.value
 })
 
 // 计算当前显示的消息
@@ -125,6 +133,8 @@ const displayMessages = computed(() => {
   result.push(...messages.value)
   return result
 })
+
+const contextMessages = computed(() => getContextMessages(displayMessages.value))
 
 // 加载模型列表
 async function loadModels() {
@@ -155,7 +165,7 @@ async function loadUserKeys() {
 // 发送消息
 async function sendMessage() {
   const content = inputMessage.value.trim()
-  if (!content || isLoading.value || !currentModelId.value || !selectedKeyId.value) return
+  if (!content || isLoading.value || hasOtherStreamingSession.value || !currentModelId.value || !selectedKeyId.value) return
 
   const model = currentModel.value
   if (!model) return
@@ -164,13 +174,14 @@ async function sendMessage() {
   if (!currentSessionId.value) {
     currentSessionId.value = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
   }
+  const sessionId = currentSessionId.value
+  const protocol = selectedProtocol.value
 
   // 添加用户消息（携带模型信息）
   const userMessage: ChatMessage = {
     role: 'user',
     content,
-    modelName: model.name,
-    providerType: currentProviderType.value
+    modelName: model.name
   }
   messages.value.push(userMessage)
   inputMessage.value = ''
@@ -182,11 +193,12 @@ async function sendMessage() {
 
   // 立即保存会话（会话名称从第一条用户消息生成）
   saveChatSession({
-    id: currentSessionId.value,
+    id: sessionId,
     name: generateSessionName(messages.value),
     model: model.name,
     modelId: currentModelId.value,
     keyId: selectedKeyId.value,
+    protocol,
     messages: [...messages.value],
     createdAt: Date.now(),
     updatedAt: Date.now()
@@ -200,17 +212,17 @@ async function sendMessage() {
 
   // 保存后台会话状态
   chatStore.setBackgroundSession({
-    sessionId: currentSessionId.value,
+    sessionId,
     modelId: currentModelId.value,
     modelName: model.name,
     keyId: selectedKeyId.value,
+    protocol,
     messages: [...messages.value],
     streamingContent: '',
     streamingReasoning: '',
     systemPrompt: systemPrompt.value,
     temperature: temperature.value,
-    maxTokens: maxTokens.value,
-    providerType: currentProviderType.value
+    maxTokens: maxTokens.value
   })
 
   // 自动调整输入框高度
@@ -236,7 +248,7 @@ async function sendMessage() {
     chatStore.addErrorAndSave(error.message)
     // 如果当前显示的是这个会话，更新组件状态
     if (bgSessionId === currentSessionId.value) {
-      messages.value.push({ role: 'assistant', content: `错误: ${error.message}` })
+      messages.value.push({ role: 'assistant', content: `错误: ${error.message}`, isError: true })
       isLoading.value = false
       streamingContent.value = ''
       streamingReasoning.value = ''
@@ -247,14 +259,13 @@ async function sendMessage() {
   const onComplete = () => {
     // 先获取助手回复内容
     const bg = chatStore.backgroundSession
-    if (bg && (bg.streamingContent || bg.streamingReasoning)) {
+    if (bg && bg.sessionId === currentSessionId.value && (bg.streamingContent || bg.streamingReasoning)) {
       // 添加助手消息到本地消息列表
       const assistantMsg: ChatMessage = {
         role: 'assistant',
         content: bg.streamingContent,
         reasoning_content: bg.streamingReasoning || undefined,
-        modelName: bg.modelName,
-        providerType: bg.providerType
+        modelName: bg.modelName
       }
       messages.value.push(assistantMsg)
     }
@@ -280,49 +291,21 @@ async function sendMessage() {
   }
 
   try {
-    // 根据供应商类型选择协议
-    if (currentProviderType.value === 'anthropic') {
-      // 使用 Anthropic 协议
-      // 转换消息格式：过滤掉 system 消息，单独传递
-      const anthropicMessages = displayMessages.value
-        .filter(m => m.role !== 'system')
-        .map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content
-        }))
-
-      await anthropicStream(
-        {
-          model: model.name,
-          messages: anthropicMessages,
-          max_tokens: maxTokens.value,
-          system: systemPrompt.value || undefined,
-          temperature: temperature.value
-        },
-        selectedKeyId.value,
-        onChunk,
-        onError,
-        onComplete,
-        onReasoning,
-        controller.signal
-      )
-    } else {
-      // 使用 OpenAI 协议
-      await chatStream(
-        {
-          model: model.name,
-          messages: displayMessages.value,
-          temperature: temperature.value,
-          max_tokens: maxTokens.value
-        },
-        selectedKeyId.value,
-        onChunk,
-        onError,
-        onComplete,
-        onReasoning,
-        controller.signal
-      )
-    }
+    await chatStream(
+      {
+        model: model.name,
+        messages: contextMessages.value,
+        temperature: temperature.value,
+        max_tokens: maxTokens.value
+      },
+      selectedKeyId.value,
+      onChunk,
+      onError,
+      onComplete,
+      onReasoning,
+      controller.signal,
+      protocol
+    )
   } catch (error) {
     isLoading.value = false
     abortController.value = null
@@ -374,8 +357,22 @@ function refreshSessions() {
   sessions.value = getChatSessions().sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+function getDraftKey(sessionId = currentSessionId.value) {
+  return sessionId || '__new_session__'
+}
+
+function saveCurrentDraft() {
+  inputDrafts.value.set(getDraftKey(), inputMessage.value)
+}
+
+function restoreDraft(sessionId = currentSessionId.value) {
+  inputMessage.value = inputDrafts.value.get(getDraftKey(sessionId)) || ''
+  nextTick(adjustTextareaHeight)
+}
+
 // 新建会话
 function newSession() {
+  saveCurrentDraft()
   // 如果当前会话有正在进行的请求，让它继续在后台处理
   // 只需切换到新会话
   messages.value = []
@@ -383,13 +380,18 @@ function newSession() {
   streamingContent.value = ''
   streamingReasoning.value = ''
   isLoading.value = false
+  restoreDraft(null)
 }
 
 // 加载会话
 function loadSession(sessionId: string) {
+  if (currentSessionId.value === sessionId && !hasOtherStreamingSession.value) return
+  saveCurrentDraft()
+
   // 如果后台会话属于要加载的会话，恢复状态
   if (chatStore.hasBackgroundSession && chatStore.backgroundSession?.sessionId === sessionId) {
     restoreBackgroundSession()
+    restoreDraft(sessionId)
     return
   }
 
@@ -401,6 +403,7 @@ function loadSession(sessionId: string) {
     streamingContent.value = ''
     streamingReasoning.value = ''
     isLoading.value = false
+    selectedProtocol.value = normalizeChatProtocol(session.protocol)
     // 恢复模型选择（优先使用保存的 modelId，否则按名称查找）
     if (session.modelId) {
       // 验证模型是否仍然存在
@@ -422,6 +425,11 @@ function loadSession(sessionId: string) {
         selectedKeyId.value = session.keyId
       }
     }
+    restoreDraft(sessionId)
+    nextTick(() => {
+      isUserAtBottom.value = true
+      scrollToBottom()
+    })
   }
 }
 
@@ -433,6 +441,7 @@ function restoreBackgroundSession() {
   currentSessionId.value = bg.sessionId
   currentModelId.value = bg.modelId
   selectedKeyId.value = bg.keyId
+  selectedProtocol.value = normalizeChatProtocol(bg.protocol)
   messages.value = [...bg.messages]
   streamingContent.value = bg.streamingContent
   streamingReasoning.value = bg.streamingReasoning
@@ -449,6 +458,7 @@ function restoreBackgroundSession() {
 
   // 滚动到底部
   nextTick(() => {
+    isUserAtBottom.value = true
     scrollToBottom()
   })
 }
@@ -469,6 +479,7 @@ function handleDeleteSession(sessionId: string) {
   if (currentSessionId.value === sessionId) {
     newSession()
   }
+  inputDrafts.value.delete(sessionId)
 }
 
 // 清空消息
@@ -597,7 +608,7 @@ onMounted(async () => {
               ></span>
             </div>
             <div class="text-xs text-gray-500 dark:text-gray-400">
-              {{ session.messages.length }} 条消息 · {{ session.model }}
+              {{ session.messages.length }} 条消息 · {{ session.model }} · {{ getChatProtocolLabel(session.protocol) }}
             </div>
           </div>
           <button
@@ -642,23 +653,24 @@ onMounted(async () => {
           >
             <option value="">选择模型</option>
             <option v-for="model in models" :key="model.id" :value="model.id">
-              {{ model.name }} ({{ model.provider_type === 'anthropic' ? 'Anthropic' : model.provider_type === 'openai' ? 'OpenAI' : '兼容' }})
+              {{ model.name }}
             </option>
           </select>
         </div>
 
-        <!-- 模型类型标签 -->
-        <span
-          v-if="currentProviderType"
-          :class="{
-            'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200': currentProviderType === 'anthropic',
-            'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200': currentProviderType === 'openai',
-            'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200': currentProviderType === 'openai_compatible'
-          }"
-          class="px-2 py-1 text-xs rounded-full"
-        >
-          {{ currentProviderType === 'anthropic' ? 'Anthropic' : currentProviderType === 'openai' ? 'OpenAI' : '兼容' }}
-        </span>
+        <!-- 协议选择 -->
+        <div class="flex items-center gap-2">
+          <label class="text-sm text-gray-600 dark:text-gray-300 whitespace-nowrap">协议</label>
+          <select
+            v-model="selectedProtocol"
+            :disabled="isCurrentSessionStreaming"
+            class="px-3 py-2 border dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          >
+            <option v-for="protocol in chatProtocols" :key="protocol.value" :value="protocol.value">
+              {{ protocol.label }}
+            </option>
+          </select>
+        </div>
 
         <button
           @click="showSettings = !showSettings"
@@ -683,6 +695,12 @@ onMounted(async () => {
       <div v-if="userKeys.length === 0" class="px-4 py-2 bg-yellow-50 dark:bg-yellow-900/20 border-b dark:border-gray-700">
         <p class="text-sm text-yellow-700 dark:text-yellow-400">
           您还没有可用的密钥，请先在「密钥管理」中创建密钥后再使用聊天功能。
+        </p>
+      </div>
+
+      <div v-else-if="hasOtherStreamingSession" class="px-4 py-2 bg-blue-50 dark:bg-blue-900/20 border-b dark:border-gray-700">
+        <p class="text-sm text-blue-700 dark:text-blue-300">
+          另一个会话正在响应中，可从左侧带绿色圆点的会话切回查看或终止。
         </p>
       </div>
 
@@ -757,16 +775,6 @@ onMounted(async () => {
               class="text-xs mb-1 flex items-center gap-1 text-gray-500 dark:text-gray-400"
             >
               <span>{{ message.modelName }}</span>
-              <span
-                v-if="message.providerType"
-                :class="{
-                  'text-purple-400': message.providerType === 'anthropic',
-                  'text-blue-400': message.providerType === 'openai',
-                  'text-gray-400': message.providerType === 'openai_compatible'
-                }"
-              >
-                · {{ message.providerType === 'anthropic' ? 'Anthropic' : message.providerType === 'openai' ? 'OpenAI' : '兼容' }}
-              </span>
             </div>
             <!-- 思考内容（可折叠） -->
             <div
@@ -855,7 +863,7 @@ onMounted(async () => {
             v-model="inputMessage"
             @input="adjustTextareaHeight"
             @keydown="handleKeydown"
-            :disabled="!currentModelId || !selectedKeyId || isLoading"
+            :disabled="!currentModelId || !selectedKeyId || isLoading || hasOtherStreamingSession"
             placeholder="输入消息... (Shift+Enter 换行)"
             rows="1"
             class="flex-1 px-4 py-3 border dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
@@ -877,7 +885,7 @@ onMounted(async () => {
           <button
             v-else
             @click="sendMessage"
-            :disabled="!inputMessage.trim() || !currentModelId || !selectedKeyId"
+            :disabled="!canSend"
             class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             发送

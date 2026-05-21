@@ -340,8 +340,8 @@ func (h *UserHandler) CreateUserKey(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"data":    key,
-		"raw_key": rawKey, // 仅创建时返回明文密钥
-		"message": "请妥善保存密钥，系统不会再次显示",
+		"raw_key": rawKey,
+		"message": "密钥已创建",
 	})
 }
 
@@ -483,7 +483,7 @@ func (h *UserHandler) RegenerateUserKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"data":    key,
 		"raw_key": rawKey,
-		"message": "请妥善保存新密钥，系统不会再次显示",
+		"message": "密钥已刷新",
 	})
 }
 

@@ -103,15 +103,6 @@ func GetUserID(c *gin.Context) string {
 	return userID.(string)
 }
 
-// GetUsername 从上下文获取用户名
-func GetUsername(c *gin.Context) string {
-	username, exists := c.Get("username")
-	if !exists {
-		return ""
-	}
-	return username.(string)
-}
-
 // GetRole 从上下文获取角色
 func GetRole(c *gin.Context) string {
 	role, exists := c.Get("role")

@@ -26,32 +26,31 @@ Provider (供应商) 1 ←───→ N ProviderKey (供应商密钥)
 
 - **供应商（Provider）**：模型供应商，如 OpenAI、Anthropic
 - **供应商密钥（ProviderKey）**：供应商的 API Key
-- **对外模型（Model）**：系统对外暴露的模型名称，包含 `provider_type` 属性（openai/anthropic/openai_compatible）
+- **对外模型（Model）**：系统对外暴露的模型名称，不绑定协议类型
 - **上游模型（Upstream）**：实际调用的供应商模型，一个对外模型可包含多个上游模型，实现负载均衡
-  - 上游模型的供应商类型必须与所属模型的 `provider_type` 匹配
 
-### 模型类型约束
+### 协议自动转换
 
-- 模型创建时必须指定 `provider_type`，创建后不可修改
-- `(name, provider_type)` 为组合唯一索引，支持同名不同类型的模型
-- 添加上游模型时，只能选择与模型类型匹配的供应商
+- 模型创建时只需指定对外名称、价格等模型属性
+- 上游模型关联具体供应商，协议类型来自供应商 `type`
+- 请求协议与上游协议不一致时，通过内置转换机制自动转换
 
 ### 负载均衡
 
 负载均衡在**上游模型（Upstream）**级别实现：
 - 支持权重：同模型的上游模型按权重随机选择（平滑加权轮询）
 
-### BU 计量单位
+### credits 计量单位
 
-系统使用抽象计量单位 BU（Basic Unit），统一表示价格、配额和费用：
+系统使用抽象计量单位 credits，统一表示价格、配额和费用：
 
-- **最小单位**: 纳 BU（1 nBU = 10^-9 BU）
-- **换算**: 1000 纳 = 1 微，1000 微 = 1 毫，1000 毫 = 1 BU
-- **存储格式**: int64 纳 BU/K tokens
-- **显示格式**: BU/M tokens（前端输入/显示）
+- **最小单位**: nano credits（1 nano credit = 10^-9 credits）
+- **换算**: 1000 nano credits = 1 microcredit，1000 microcredits = 1 millicredit，1000 millicredits = 1 credit
+- **存储格式**: int64 nano credits/K tokens
+- **显示格式**: credits/M tokens（前端输入/显示）
 - **换算公式**: 显示值 = 存储值 × 10^-6
 
-BU 作为抽象单位，后续可与人民币、美元等货币换算。
+credits 作为抽象单位，后续可与人民币、美元等货币换算。
 
 ## 快速开始
 
@@ -112,7 +111,7 @@ AIRouter/
 - [x] 阶段六：管理 API 与前端
 - [x] 阶段七：高级功能
 - [x] 数据模型重构：引入 Upstream 概念
-- [x] 模型类型属性：provider_type 字段，同名不同类型模型支持
+- [x] 模型协议解耦：协议由上游供应商类型驱动并自动转换
 - [ ] 阶段八：部署与文档（暂缓）
 
 ## License

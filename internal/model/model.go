@@ -28,7 +28,7 @@ func (User) TableName() string {
 type UserKey struct {
 	ID          string         `gorm:"primaryKey;size:36" json:"id"`
 	Name        string         `gorm:"size:128;not null" json:"name"`
-	Key         string         `gorm:"size:256;not null" json:"-"` // 用户 API Key
+	Key         string         `gorm:"size:256;not null" json:"key"` // 用户 API Key
 	UserID      string         `gorm:"size:64;not null;index" json:"user_id"`
 	Permissions string         `gorm:"type:text" json:"permissions"` // JSON 数组：models:*, models:gpt-4
 	RateLimit   int            `gorm:"default:60" json:"rate_limit"` // 请求/分钟
@@ -46,11 +46,28 @@ func (UserKey) TableName() string {
 	return "user_keys"
 }
 
+const (
+	ProviderTypeOpenAI         = "openai"
+	ProviderTypeAnthropic      = "anthropic"
+	ProviderTypeOpenAIResponse = "openai_response"
+)
+
+var SupportedProviderTypes = map[string]struct{}{
+	ProviderTypeOpenAI:         {},
+	ProviderTypeAnthropic:      {},
+	ProviderTypeOpenAIResponse: {},
+}
+
+func IsSupportedProviderType(providerType string) bool {
+	_, ok := SupportedProviderTypes[providerType]
+	return ok
+}
+
 // Provider 供应商模型
 type Provider struct {
 	ID          string         `gorm:"primaryKey;size:36" json:"id"`
 	Name        string         `gorm:"uniqueIndex;size:64;not null" json:"name"` // openai, anthropic, azure, baidu, aliyun
-	Type        string         `gorm:"size:32;not null" json:"type"`             // openai, anthropic, openai_compatible
+	Type        string         `gorm:"size:32;not null" json:"type"`             // openai, anthropic, openai_response
 	BaseURL     string         `gorm:"size:256" json:"base_url"`
 	APIPath     string         `gorm:"size:256" json:"api_path"` // API 路径，留空使用默认路径
 	Description string         `gorm:"size:512" json:"description"`
@@ -109,15 +126,14 @@ func (Upstream) TableName() string {
 }
 
 // Model 对外大模型配置
-// 移除了 ProviderID、ProviderModel、APIPath，通过 Upstream 关联
+// 移除了 ProviderID、ProviderModel、ProviderType、APIPath，通过 Upstream 关联
 type Model struct {
 	ID            string         `gorm:"primaryKey;size:36" json:"id"`
-	Name          string         `gorm:"uniqueIndex:idx_model_name_type;size:64;not null" json:"name"`          // 模型名称（对外展示）
-	ProviderType  string         `gorm:"uniqueIndex:idx_model_name_type;size:32;not null" json:"provider_type"` // 供应商类型：openai, anthropic, openai_compatible
-	Description   string         `gorm:"size:512" json:"description"`                                           // 模型描述
-	InputPrice    int64          `gorm:"default:0" json:"input_price"`                                          // 输入价格（纳 BU/1K token）
-	OutputPrice   int64          `gorm:"default:0" json:"output_price"`                                         // 输出价格（纳 BU/1K token）
-	ContextWindow int            `gorm:"default:4096" json:"context_window"`                                    // 上下文窗口大小
+	Name          string         `gorm:"index;size:64;not null" json:"name"` // 模型名称（对外展示）
+	Description   string         `gorm:"size:512" json:"description"`        // 模型描述
+	InputPrice    int64          `gorm:"default:0" json:"input_price"`       // 输入价格（nano credits/1K token）
+	OutputPrice   int64          `gorm:"default:0" json:"output_price"`      // 输出价格（nano credits/1K token）
+	ContextWindow int            `gorm:"default:4096" json:"context_window"` // 上下文窗口大小
 	Enabled       bool           `gorm:"default:true" json:"enabled"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
@@ -138,9 +154,11 @@ type UsageLog struct {
 	UpstreamID         string    `gorm:"index;size:36" json:"upstream_id"`     // 关联上游模型，可获取 provider_model、model_id、provider_id
 	ProviderKeyID      string    `gorm:"index;size:36" json:"provider_key_id"` // 关联供应商密钥
 	Model              string    `gorm:"index;size:64" json:"model"`           // 对外模型名称（保留用于索引优化）
+	Protocol           string    `gorm:"size:32;index" json:"protocol"`        // 客户端调用协议
+	ProviderType       string    `gorm:"size:32;index" json:"provider_type"`   // 上游协议快照
 	InputTokens        int       `gorm:"default:0" json:"input_tokens"`
 	OutputTokens       int       `gorm:"default:0" json:"output_tokens"`
-	Cost               int64     `gorm:"default:0" json:"cost"`                 // 费用（纳 BU）
+	Cost               int64     `gorm:"default:0" json:"cost"`                 // 费用（nano credits）
 	Latency            int       `gorm:"default:0" json:"latency"`              // 延迟(ms)，流式请求为TTFB
 	FirstTokenLatency  int       `gorm:"default:0" json:"first_token_latency"`  // 首Token延迟(ms)，仅流式请求有效
 	TotalDuration      int       `gorm:"default:0" json:"total_duration"`       // 总耗时(ms)，从请求发起到响应完成

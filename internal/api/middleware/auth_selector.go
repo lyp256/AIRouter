@@ -21,7 +21,6 @@ type AuthSelectorConfig struct {
 // - /v1/* → API Key 认证（支持 JWT+KeyID 混合认证）
 // - /api/admin/auth/login、/api/admin/auth/logout → 无需认证
 // - /api/admin/* 其他 → JWT 认证
-// - /health → 无需认证
 func AuthSelector(cfg AuthSelectorConfig) gin.HandlerFunc {
 	// 预创建认证中间件
 	apiAuth := APIKeyAuth(APIKeyAuthConfig(cfg))
@@ -29,12 +28,6 @@ func AuthSelector(cfg AuthSelectorConfig) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-
-		// 健康检查无需认证
-		if path == "/health" {
-			c.Next()
-			return
-		}
 
 		// /v1/* 使用 API Key 认证（支持 JWT+KeyID）
 		if strings.HasPrefix(path, "/v1/") {

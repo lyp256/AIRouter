@@ -73,15 +73,10 @@ func (s *UpstreamSelector) SelectUpstream(modelID string, excludeIDs ...string) 
 		return nil, err
 	}
 
-	// 获取关联的 ProviderKey（带缓存）
+	// ProviderKey.Key has json:"-", so caching the model drops the secret when
+	// it is unmarshaled back. Load it directly to keep upstream auth intact.
 	var apiKey model.ProviderKey
-	if err := s.cache.Once(ctx, fmt.Sprintf("provider_key:%s", upstream.ProviderKeyID), &apiKey, s.cacheTTL, func() (interface{}, error) {
-		var k model.ProviderKey
-		if err := s.db.First(&k, "id = ?", upstream.ProviderKeyID).Error; err != nil {
-			return nil, err
-		}
-		return k, nil
-	}); err != nil {
+	if err := s.db.First(&apiKey, "id = ?", upstream.ProviderKeyID).Error; err != nil {
 		return nil, err
 	}
 
@@ -117,16 +112,13 @@ func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream, excludeID
 		excluded[id] = true
 	}
 
-	// 过滤出活跃状态且不在排除列表中的上游模型
+	// 过滤出启用且不在排除列表中的上游模型
 	activeUpstreams := make([]*model.Upstream, 0, len(upstreams))
 	for _, u := range upstreams {
 		if !u.Enabled || excluded[u.ID] {
 			continue
 		}
-		// 从缓存检查健康状态（缓存未命中 = 健康）
-		if s.isUpstreamHealthy(u.ID) {
-			activeUpstreams = append(activeUpstreams, u)
-		}
+		activeUpstreams = append(activeUpstreams, u)
 	}
 
 	if len(activeUpstreams) == 0 {
@@ -162,59 +154,6 @@ func (s *UpstreamSelector) selectByWeight(upstreams []*model.Upstream, excludeID
 	return activeUpstreams[0]
 }
 
-// isUpstreamHealthy 从缓存检查上游是否健康
-func (s *UpstreamSelector) isUpstreamHealthy(upstreamID string) bool {
-	health := GetUpstreamHealthFromCache(s.cache, upstreamID)
-	if health == nil {
-		return true // 缓存未命中，默认健康
-	}
-	return health.Status == "active"
-}
-
-// MarkUpstreamError 标记上游模型错误（写入缓存）
-func (s *UpstreamSelector) MarkUpstreamError(upstreamID string) error {
-	// 读取已有健康状态以保留连续计数
-	health := GetUpstreamHealthFromCache(s.cache, upstreamID)
-	if health == nil {
-		health = &UpstreamHealthStatus{
-			UpstreamID: upstreamID,
-			Status:     "active",
-		}
-	}
-
-	health.UpstreamID = upstreamID
-	health.ConsecFail++
-	health.ConsecSuccess = 0
-	health.Status = "error"
-	health.LastErrorTime = time.Now()
-
-	return SetUpstreamHealthToCache(s.cache, upstreamID, health)
-}
-
-// MarkUpstreamSuccess 标记上游模型成功（写入缓存）
-func (s *UpstreamSelector) MarkUpstreamSuccess(upstreamID string) error {
-	health := GetUpstreamHealthFromCache(s.cache, upstreamID)
-	if health == nil {
-		// 无健康记录说明一直健康，无需操作
-		return nil
-	}
-
-	// 有记录（当前为 error 状态），成功请求直接恢复
-	health.ConsecSuccess++
-	health.ConsecFail = 0
-	health.Status = "active"
-	health.LastCheckTime = time.Now()
-
-	return SetUpstreamHealthToCache(s.cache, upstreamID, health)
-}
-
-// UpdateQuotaUsed 更新已使用配额
-func (s *UpstreamSelector) UpdateQuotaUsed(apiKeyID string, delta int64) error {
-	return s.db.Model(&model.ProviderKey{}).
-		Where("id = ?", apiKeyID).
-		UpdateColumn("quota_used", gorm.Expr("quota_used + ?", delta)).Error
-}
-
 // GetUpstreamSelection 根据 upstreamID 获取完整的选择信息（用于测试）
 func (s *UpstreamSelector) GetUpstreamSelection(upstreamID string) (*UpstreamSelection, error) {
 	var upstream model.Upstream
@@ -243,17 +182,6 @@ func (s *UpstreamSelector) GetUpstreamSelection(upstreamID string) (*UpstreamSel
 // InvalidateCache 使缓存失效
 func (s *UpstreamSelector) InvalidateCache(modelID string) {
 	_ = s.cache.Delete(context.Background(), fmt.Sprintf("upstreams:model:%s", modelID))
-}
-
-// InvalidateAllCache 使所有缓存失效
-func (s *UpstreamSelector) InvalidateAllCache() {
-	// 由于 cache 接口不支持通配符删除，逐一删除 modelID 对应的缓存
-	// 通过查询所有模型 ID 来清理
-	var modelIDs []string
-	s.db.Model(&model.Model{}).Pluck("id", &modelIDs)
-	for _, id := range modelIDs {
-		_ = s.cache.Delete(context.Background(), fmt.Sprintf("upstreams:model:%s", id))
-	}
 }
 
 // GetUpstreamsByModel 获取模型的所有上游模型

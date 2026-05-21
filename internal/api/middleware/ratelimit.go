@@ -11,9 +11,8 @@ import (
 type RateLimiter struct {
 	mu       sync.Mutex
 	requests map[string]*clientInfo
-	rpm      int           // 每分钟请求数
-	ticker   *time.Ticker  // 定时清理器
-	stopCh   chan struct{} // 停止信号
+	rpm      int          // 每分钟请求数
+	ticker   *time.Ticker // 定时清理器
 }
 
 type clientInfo struct {
@@ -26,7 +25,6 @@ func NewRateLimiter(rpm int) *RateLimiter {
 	rl := &RateLimiter{
 		requests: make(map[string]*clientInfo),
 		rpm:      rpm,
-		stopCh:   make(chan struct{}),
 	}
 	// 启动定时清理协程，每分钟清理一次过期记录
 	rl.ticker = time.NewTicker(time.Minute)
@@ -36,20 +34,9 @@ func NewRateLimiter(rpm int) *RateLimiter {
 
 // cleanupLoop 定时清理过期记录
 func (rl *RateLimiter) cleanupLoop() {
-	for {
-		select {
-		case <-rl.ticker.C:
-			rl.Cleanup()
-		case <-rl.stopCh:
-			return
-		}
+	for range rl.ticker.C {
+		rl.Cleanup()
 	}
-}
-
-// Stop 停止限流器（用于优雅关闭）
-func (rl *RateLimiter) Stop() {
-	close(rl.stopCh)
-	rl.ticker.Stop()
 }
 
 // Allow 检查是否允许请求

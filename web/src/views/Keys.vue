@@ -192,9 +192,14 @@ async function deleteKey(key: UserKey) {
   }
 }
 
-function copyRawKey() {
-  navigator.clipboard.writeText(createdRawKey.value)
+function copyText(text: string) {
+  if (!text) return
+  navigator.clipboard.writeText(text)
   alert('已复制到剪贴板')
+}
+
+function copyRawKey() {
+  copyText(createdRawKey.value)
 }
 
 function closeRawKeyModal() {
@@ -257,6 +262,7 @@ onMounted(loadUsers)
           <thead class="bg-gray-50 dark:bg-gray-700">
             <tr>
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300">名称</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300">密钥</th>
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300">限流</th>
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300">配额使用</th>
               <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300">状态</th>
@@ -267,6 +273,18 @@ onMounted(loadUsers)
           <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
             <tr v-for="k in userKeys" :key="k.id">
               <td class="px-4 py-3 text-sm dark:text-white">{{ k.name }}</td>
+              <td class="px-4 py-3 text-sm dark:text-gray-300">
+                <div class="flex items-center gap-2 max-w-xs">
+                  <code class="truncate text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">{{ k.key }}</code>
+                  <button
+                    @click="copyText(k.key)"
+                    class="text-blue-600 hover:text-blue-800 text-sm"
+                    title="复制密钥"
+                  >
+                    复制
+                  </button>
+                </div>
+              </td>
               <td class="px-4 py-3 text-sm dark:text-gray-300">{{ k.rate_limit }}/min</td>
               <td class="px-4 py-3 text-sm dark:text-gray-300">{{ k.quota_used }} / {{ k.quota_limit || '∞' }}</td>
               <td class="px-4 py-3">
@@ -445,7 +463,7 @@ onMounted(loadUsers)
     <div v-if="showRawKeyModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 w-full max-w-md">
         <h2 class="text-xl font-bold mb-4 dark:text-white text-green-600">密钥已生成</h2>
-        <p class="text-red-600 dark:text-red-400 mb-4 font-medium">请立即保存此密钥，系统不会再次显示！</p>
+        <p class="text-gray-600 dark:text-gray-300 mb-4 font-medium">密钥已明文保存，可稍后在密钥列表中复制。</p>
         <div class="bg-gray-100 dark:bg-gray-700 p-3 rounded-lg mb-4 break-all">
           <code class="text-sm dark:text-white">{{ createdRawKey }}</code>
         </div>

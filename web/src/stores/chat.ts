@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { ChatMessage } from '@/api/types'
-import { generateSessionName, saveChatSession } from '@/api/chat'
+import { generateSessionName, saveChatSession, type ChatProtocol } from '@/api/chat'
 
 // 后台会话状态
 export interface BackgroundSession {
@@ -9,13 +9,13 @@ export interface BackgroundSession {
   modelId: string
   modelName: string // 模型名称，用于 API 调用
   keyId: string
+  protocol: ChatProtocol
   messages: ChatMessage[]
   streamingContent: string
   streamingReasoning: string
   systemPrompt: string
   temperature: number
   maxTokens: number
-  providerType: string // 供应商类型
 }
 
 // 模块级 AbortController（避免 Pinia Proxy 问题）
@@ -61,8 +61,7 @@ export const useChatStore = defineStore('chat', () => {
         role: 'assistant',
         content: bg.streamingContent,
         reasoning_content: bg.streamingReasoning || undefined,
-        modelName: bg.modelName,
-        providerType: bg.providerType
+        modelName: bg.modelName
       }
       bg.messages.push(assistantMsg)
     }
@@ -76,6 +75,7 @@ export const useChatStore = defineStore('chat', () => {
         model: bg.modelName,
         modelId: bg.modelId,
         keyId: bg.keyId,
+        protocol: bg.protocol,
         messages: bg.messages,
         createdAt: Date.now(),
         updatedAt: Date.now()
@@ -93,7 +93,8 @@ export const useChatStore = defineStore('chat', () => {
     if (backgroundSession.value) {
       backgroundSession.value.messages.push({
         role: 'assistant',
-        content: `错误: ${errorMsg}`
+        content: `错误: ${errorMsg}`,
+        isError: true
       })
       completeAndSaveBackgroundSession()
     }
@@ -120,8 +121,7 @@ export const useChatStore = defineStore('chat', () => {
           role: 'assistant',
           content: bg.streamingContent || '(已终止)',
           reasoning_content: bg.streamingReasoning || undefined,
-          modelName: bg.modelName,
-          providerType: bg.providerType
+          modelName: bg.modelName
         })
       }
       completeAndSaveBackgroundSession()

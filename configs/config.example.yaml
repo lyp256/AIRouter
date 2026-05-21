@@ -59,14 +59,3 @@ cache:
   #   addr: "localhost:6379"
   #   password: ""
   #   db: 0
-
-# 上游健康检查配置
-health_check:
-  enabled: true                # 是否启用健康检查服务
-  full_check_interval: "5m"    # 全量检查间隔（检查所有启用上游）
-  recovery_interval: "30s"     # 恢复检查间隔（仅检查不健康上游）
-  timeout: "10s"               # 单次探测超时
-  healthy_threshold: 2         # 连续成功次数达此阈值标记为健康
-  unhealthy_threshold: 3       # 连续失败次数达此阈值标记为不健康
-  leader_lease: "30s"          # 分布式选主租约时长（Redis 缓存模式下生效）
-  leader_renew_interval: "10s" # 选主续约间隔

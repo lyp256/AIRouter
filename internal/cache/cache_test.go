@@ -8,7 +8,7 @@ import (
 	"github.com/lyp256/airouter/internal/config"
 )
 
-func TestNamespace(t *testing.T) {
+func TestCacheOnce(t *testing.T) {
 	cfg := &config.CacheConfig{
 		Enabled: true,
 		Type:    "memory",
@@ -22,11 +22,11 @@ func TestNamespace(t *testing.T) {
 		Name string
 	}
 
-	ns := NewNamespace[*User](c, "user", time.Minute)
 	ctx := context.Background()
+	key := "user:1"
 
-	// Test Once
-	u, err := ns.Once(ctx, "1", 0, func() (*User, error) {
+	var u *User
+	err := c.Once(ctx, key, &u, time.Minute, func() (interface{}, error) {
 		return &User{ID: "1", Name: "Test"}, nil
 	})
 	if err != nil {
@@ -36,8 +36,8 @@ func TestNamespace(t *testing.T) {
 		t.Errorf("expected Test, got %s", u.Name)
 	}
 
-	// Test Get
-	u2, err := ns.Get(ctx, "1")
+	var u2 *User
+	err = c.Get(ctx, key, &u2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,9 +45,8 @@ func TestNamespace(t *testing.T) {
 		t.Errorf("expected Test, got %s", u2.Name)
 	}
 
-	// Test Delete
-	_ = ns.Delete(ctx, "1")
-	_, err = ns.Get(ctx, "1")
+	_ = c.Delete(ctx, key)
+	err = c.Get(ctx, key, &u2)
 	if err != ErrCacheMiss {
 		t.Errorf("expected ErrCacheMiss, got %v", err)
 	}

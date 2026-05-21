@@ -265,17 +265,3 @@ func GetUserKey(c *gin.Context) *model.UserKey {
 	}
 	return key.(*model.UserKey)
 }
-
-// InvalidateUserKeyCache 使用户密钥缓存失效
-func InvalidateUserKeyCache(c cache.Cache, keyID string) {
-	ctx := context.Background()
-	// 通过 ID 找到 hash，然后清理两个缓存
-	var hashData struct {
-		Hash string `json:"hash"`
-	}
-	if err := c.Get(ctx, "user_key:id2hash:"+keyID, &hashData); err == nil {
-		_ = c.Delete(ctx, "user_key:hash:"+hashData.Hash)
-	}
-	_ = c.Delete(ctx, "user_key:id2hash:"+keyID)
-	_ = c.Delete(ctx, "user_key:id:"+keyID)
-}

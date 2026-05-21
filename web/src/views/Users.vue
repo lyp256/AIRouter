@@ -149,11 +149,10 @@ async function toggleKeyStatus(key: UserKey) {
   }
 }
 
-function copyKey() {
-  if (newRawKey.value) {
-    navigator.clipboard.writeText(newRawKey.value)
-    alert('已复制到剪贴板')
-  }
+function copyKey(key: string) {
+  if (!key) return
+  navigator.clipboard.writeText(key)
+  alert('已复制到剪贴板')
 }
 
 onMounted(loadUsers)
@@ -300,7 +299,7 @@ onMounted(loadUsers)
           <p class="text-sm text-green-800 dark:text-green-200 mb-2">新密钥已创建，请妥善保存：</p>
           <div class="flex items-center gap-2">
             <code class="flex-1 p-2 bg-white dark:bg-gray-700 rounded text-sm">{{ newRawKey }}</code>
-            <button @click="copyKey" class="px-3 py-1 bg-green-600 text-white rounded text-sm">复制</button>
+            <button @click="copyKey(newRawKey)" class="px-3 py-1 bg-green-600 text-white rounded text-sm">复制</button>
           </div>
         </div>
 
@@ -321,6 +320,7 @@ onMounted(loadUsers)
           <thead class="bg-gray-50 dark:bg-gray-700">
             <tr>
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">名称</th>
+              <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">密钥</th>
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">限流</th>
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">配额</th>
               <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300">状态</th>
@@ -330,6 +330,12 @@ onMounted(loadUsers)
           <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
             <tr v-for="k in userKeys" :key="k.id">
               <td class="px-4 py-2 text-sm dark:text-white">{{ k.name }}</td>
+              <td class="px-4 py-2 text-sm dark:text-gray-300">
+                <div class="flex items-center gap-2 max-w-xs">
+                  <code class="truncate text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">{{ k.key }}</code>
+                  <button @click="copyKey(k.key)" class="text-blue-600 text-sm">复制</button>
+                </div>
+              </td>
               <td class="px-4 py-2 text-sm dark:text-gray-300">{{ k.rate_limit }}/min</td>
               <td class="px-4 py-2 text-sm dark:text-gray-300">{{ k.quota_used }} / {{ k.quota_limit || '∞' }}</td>
               <td class="px-4 py-2">

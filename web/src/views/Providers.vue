@@ -49,11 +49,18 @@ const savingKey = ref(false)
 // 供应商类型配置
 const providerTypeConfigs = {
   openai: {
-    label: 'OpenAI',
+    label: 'OpenAI Chat Completions',
     defaultBaseUrl: 'https://api.openai.com',
     defaultApiPath: '/v1/chat/completions',
     baseUrlPlaceholder: 'https://api.openai.com',
     apiPathPlaceholder: '/v1/chat/completions（留空使用默认）'
+  },
+  openai_response: {
+    label: 'OpenAI Responses',
+    defaultBaseUrl: 'https://api.openai.com',
+    defaultApiPath: '/v1/responses',
+    baseUrlPlaceholder: 'https://api.openai.com',
+    apiPathPlaceholder: '/v1/responses（留空使用默认）'
   },
   anthropic: {
     label: 'Anthropic',
@@ -61,13 +68,6 @@ const providerTypeConfigs = {
     defaultApiPath: '/v1/messages',
     baseUrlPlaceholder: 'https://api.anthropic.com',
     apiPathPlaceholder: '/v1/messages（留空使用默认）'
-  },
-  openai_compatible: {
-    label: 'OpenAI 兼容',
-    defaultBaseUrl: '',
-    defaultApiPath: '/v1/chat/completions',
-    baseUrlPlaceholder: '例如: https://api.deepseek.com',
-    apiPathPlaceholder: '例如: /v1/chat/completions'
   }
 }
 

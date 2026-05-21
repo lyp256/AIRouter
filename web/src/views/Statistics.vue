@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { statsApi } from '@/api/stats'
 import type { UsageLog, FilterOptions } from '@/api/types'
-import { formatBU } from '@/utils/format'
+import { formatCredits } from '@/utils/format'
 
 const logs = ref<UsageLog[]>([])
 const loading = ref(false)
@@ -207,12 +207,12 @@ onMounted(() => {
           <tr v-for="log in logs" :key="log.id">
             <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{{ formatTime(log.created_at) }}</td>
             <td class="px-4 py-3 text-sm text-gray-900 dark:text-white">{{ log.model }}</td>
-            <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ log.provider_type || '-' }}</td>
+            <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ log.protocol || log.provider_type || '-' }}</td>
             <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ log.provider_name || '-' }}</td>
             <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ log.provider_model || '-' }}</td>
             <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ log.input_tokens }}</td>
             <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ log.output_tokens }}</td>
-            <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ formatBU(log.cost) }}</td>
+            <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ formatCredits(log.cost) }}</td>
             <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ formatLatency(log.latency) }}</td>
             <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ formatLatency(log.first_token_latency) }}</td>
             <td class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ formatLatency(log.total_duration) }}</td>

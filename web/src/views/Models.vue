@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { modelApi, upstreamApi } from '@/api/model'
 import { providerApi } from '@/api/provider'
 import type { Model, ModelWithUpstreams, Upstream, Provider, ProviderKey, UpstreamTestResult } from '@/api/types'
-import { storageToDisplay, displayToStorage, formatBU } from '@/utils/format'
+import { storageToDisplay, displayToStorage, formatCredits } from '@/utils/format'
 
 const models = ref<Model[]>([])
 const modelDetails = ref<Map<string, ModelWithUpstreams>>(new Map())
@@ -29,15 +29,23 @@ const togglingModelId = ref<string | null>(null)
 const savingUpstream = ref(false)
 const deletingUpstreamId = ref<string | null>(null)
 const togglingUpstreamId = ref<string | null>(null)
-const resettingUpstreamId = ref<string | null>(null)
 
-// 表单使用 BU/M tokens 单位（用户友好）
+type ApiProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages'
+
+const apiProtocols: { value: ApiProtocol; label: string; path: string }[] = [
+  { value: 'openai-chat', label: 'OpenAI Chat Completions', path: '/v1/chat/completions' },
+  { value: 'openai-responses', label: 'OpenAI Responses', path: '/v1/responses' },
+  { value: 'anthropic-messages', label: 'Anthropic Messages', path: '/v1/messages' },
+]
+const selectedApiProtocol = ref<ApiProtocol>('openai-chat')
+const copiedModelId = ref<string | null>(null)
+
+// 表单使用 credits/M tokens 单位（用户友好）
 const modelForm = ref({
   name: '',
-  provider_type: 'anthropic', // 默认类型
   description: '',
-  input_price: 0,  // BU/M tokens
-  output_price: 0, // BU/M tokens
+  input_price: 0,  // credits/M tokens
+  output_price: 0, // credits/M tokens
   context_window: 4096
 })
 
@@ -89,7 +97,6 @@ function openCreateModelModal() {
   editingModel.value = null
   modelForm.value = {
     name: '',
-    provider_type: 'anthropic',
     description: '',
     input_price: 0,
     output_price: 0,
@@ -102,10 +109,9 @@ function openEditModelModal(model: Model) {
   editingModel.value = model
   modelForm.value = {
     name: model.name,
-    provider_type: model.provider_type,
     description: model.description || '',
-    input_price: storageToDisplay(model.input_price),  // 转换为 BU/M 显示
-    output_price: storageToDisplay(model.output_price), // 转换为 BU/M 显示
+    input_price: storageToDisplay(model.input_price),  // 转换为 credits/M 显示
+    output_price: storageToDisplay(model.output_price), // 转换为 credits/M 显示
     context_window: model.context_window
   }
   showModelModal.value = true
@@ -114,7 +120,7 @@ function openEditModelModal(model: Model) {
 async function saveModel() {
   savingModel.value = true
   try {
-    // 提交时将 BU/M 转换为存储格式（纳 BU/K）
+    // 提交时将 credits/M 转换为存储格式（nano credits/K）
     const payload = {
       ...modelForm.value,
       input_price: displayToStorage(modelForm.value.input_price),
@@ -235,20 +241,6 @@ async function toggleUpstream(upstream: Upstream, modelId: string) {
   }
 }
 
-async function resetUpstreamStatus(upstream: Upstream, modelId: string) {
-  resettingUpstreamId.value = upstream.id
-  try {
-    await upstreamApi.resetStatus(upstream.id)
-    modelDetails.value.delete(modelId)
-    const res = await modelApi.get(modelId)
-    modelDetails.value.set(modelId, res.data)
-  } catch (e) {
-    alert('重置失败')
-  } finally {
-    resettingUpstreamId.value = null
-  }
-}
-
 async function testUpstream(upstream: Upstream) {
   testingUpstreamId.value = upstream.id
   testResults.value.delete(upstream.id)
@@ -311,32 +303,57 @@ function getUpstreams(modelId: string): Upstream[] {
   return detail?.upstreams || []
 }
 
-// 获取当前模型的供应商类型
-function getCurrentModelType(): string {
-  const model = models.value.find(m => m.id === currentModelId.value)
-  return model?.provider_type || 'openai_compatible'
-}
-
-// 获取过滤后的供应商列表（只显示与模型类型匹配的供应商）
+// 获取可用供应商列表
 function getFilteredProviders(): Provider[] {
-  const modelType = getCurrentModelType()
-  return providers.value.filter(p => p.type === modelType)
+  return providers.value
 }
 
 // API 调用地址
 const apiBaseUrl = computed(() => window.location.origin)
+const selectedProtocol = computed(() => apiProtocols.find(p => p.value === selectedApiProtocol.value) || apiProtocols[0])
 
-function getModelApiPath(model: Model): string {
-  if (model.provider_type === 'anthropic') {
-    return `${apiBaseUrl.value}/v1/messages`
-  }
-  return `${apiBaseUrl.value}/v1/chat/completions`
+function getModelApiPath(): string {
+  return `${apiBaseUrl.value}${selectedProtocol.value.path}`
 }
 
-function copyModelApiInfo(model: Model) {
-  const url = getModelApiPath(model)
-  const text = `API 地址: ${url}\n模型名称: ${model.name}`
-  navigator.clipboard.writeText(text)
+async function writeClipboard(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textArea = document.createElement('textarea')
+  textArea.value = text
+  textArea.setAttribute('readonly', '')
+  textArea.style.position = 'fixed'
+  textArea.style.left = '-9999px'
+  textArea.style.top = '0'
+  document.body.appendChild(textArea)
+  textArea.focus()
+  textArea.select()
+
+  try {
+    const copied = document.execCommand('copy')
+    if (!copied) throw new Error('execCommand copy failed')
+  } finally {
+    document.body.removeChild(textArea)
+  }
+}
+
+async function copyModelApiInfo(model: Model) {
+  const url = getModelApiPath()
+  const text = `API 协议: ${selectedProtocol.value.label}\nAPI 地址: ${url}\n模型名称: ${model.name}`
+
+  try {
+    await writeClipboard(text)
+    copiedModelId.value = model.id
+    window.setTimeout(() => {
+      if (copiedModelId.value === model.id) copiedModelId.value = null
+    }, 1500)
+  } catch (e) {
+    console.error('复制调用信息失败', e)
+    alert('复制失败，请检查浏览器剪贴板权限')
+  }
 }
 
 onMounted(loadData)
@@ -346,7 +363,17 @@ onMounted(loadData)
   <div class="p-6">
     <div class="flex justify-between items-center mb-6">
       <h1 class="text-2xl font-bold text-gray-800 dark:text-white">模型管理</h1>
-      <div class="flex gap-2">
+      <div class="flex items-center gap-2">
+        <label class="text-sm text-gray-600 dark:text-gray-300 whitespace-nowrap" for="api-protocol">API 协议</label>
+        <select
+          id="api-protocol"
+          v-model="selectedApiProtocol"
+          class="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:bg-gray-700 dark:text-white"
+        >
+          <option v-for="protocol in apiProtocols" :key="protocol.value" :value="protocol.value">
+            {{ protocol.label }}
+          </option>
+        </select>
         <button
           @click="loadData"
           :disabled="loading"
@@ -376,7 +403,6 @@ onMounted(loadData)
           <tr>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase w-8"></th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">模型名称</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">类型</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">描述</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">输入价格</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">输出价格</th>
@@ -396,21 +422,9 @@ onMounted(loadData)
                 </button>
               </td>
               <td class="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">{{ m.name }}</td>
-              <td class="px-6 py-4">
-                <span
-                  :class="{
-                    'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200': m.provider_type === 'anthropic',
-                    'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200': m.provider_type === 'openai',
-                    'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200': !m.provider_type || m.provider_type === 'openai_compatible'
-                  }"
-                  class="px-2 py-1 text-xs rounded-full"
-                >
-                  {{ m.provider_type === 'anthropic' ? 'Anthropic' : m.provider_type === 'openai' ? 'OpenAI' : m.provider_type || '兼容' }}
-                </span>
-              </td>
               <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">{{ m.description || '-' }}</td>
-              <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">{{ formatBU(m.input_price) }}</td>
-              <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">{{ formatBU(m.output_price) }}</td>
+              <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">{{ formatCredits(m.input_price) }}</td>
+              <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">{{ formatCredits(m.output_price) }}</td>
               <td class="px-6 py-4">
                 <span
                   :class="m.enabled ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'"
@@ -421,15 +435,18 @@ onMounted(loadData)
               </td>
               <td class="px-6 py-4">
                 <div class="flex items-center gap-1">
-                  <span class="text-xs font-mono text-gray-500 dark:text-gray-400 truncate max-w-[200px]" :title="getModelApiPath(m)">
-                    {{ getModelApiPath(m) }}
+                  <span class="text-xs font-mono text-gray-500 dark:text-gray-400 truncate max-w-[200px]" :title="getModelApiPath()">
+                    {{ getModelApiPath() }}
                   </span>
                   <button
                     @click="copyModelApiInfo(m)"
                     class="text-gray-400 hover:text-blue-600 shrink-0"
-                    title="复制调用信息"
+                    :title="copiedModelId === m.id ? '已复制' : '复制调用信息'"
                   >
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg v-if="copiedModelId === m.id" class="w-3.5 h-3.5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                    <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                     </svg>
                   </button>
@@ -488,7 +505,7 @@ onMounted(loadData)
                       <th class="py-2 text-left">实际模型</th>
                       <th class="py-2 text-left">权重</th>
                       <th class="py-2 text-left">启用</th>
-                      <th class="py-2 text-left">健康状态</th>
+                      <th class="py-2 text-left">状态</th>
                       <th class="py-2 text-right">操作</th>
                     </tr>
                   </thead>
@@ -517,14 +534,6 @@ onMounted(loadData)
                         >
                           {{ u.status === 'active' ? '健康' : u.status === 'error' ? '异常' : u.status }}
                         </span>
-                        <button
-                          v-if="u.status === 'error'"
-                          @click="resetUpstreamStatus(u, m.id)"
-                          :disabled="resettingUpstreamId === u.id"
-                          class="ml-1 text-xs text-orange-600 hover:text-orange-800 underline disabled:opacity-50"
-                        >
-                          {{ resettingUpstreamId === u.id ? '重置中...' : '重置' }}
-                        </button>
                         <span v-if="testResults.has(u.id)" class="ml-2">
                           <span
                             :class="testResults.get(u.id)!.success
@@ -598,41 +607,17 @@ onMounted(loadData)
               <label class="block text-sm font-medium mb-1 dark:text-gray-200">模型名称（对外）</label>
               <input v-model="modelForm.name" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" required />
             </div>
-            <!-- 类型选择：仅创建时可选，编辑时不可修改 -->
-            <div v-if="!editingModel">
-              <label class="block text-sm font-medium mb-1 dark:text-gray-200">供应商类型 <span class="text-red-500">*</span></label>
-              <select v-model="modelForm.provider_type" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" required>
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai_compatible">兼容模式</option>
-              </select>
-              <p class="text-xs text-gray-500 mt-1">创建后不可修改</p>
-            </div>
-            <!-- 编辑时显示类型标签 -->
-            <div v-else>
-              <label class="block text-sm font-medium mb-1 dark:text-gray-200">供应商类型</label>
-              <span
-                :class="{
-                  'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200': editingModel.provider_type === 'anthropic',
-                  'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200': editingModel.provider_type === 'openai',
-                  'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200': editingModel.provider_type === 'openai_compatible'
-                }"
-                class="px-3 py-1 text-sm rounded-full"
-              >
-                {{ editingModel.provider_type === 'anthropic' ? 'Anthropic' : editingModel.provider_type === 'openai' ? 'OpenAI' : '兼容模式' }}
-              </span>
-            </div>
             <div>
               <label class="block text-sm font-medium mb-1 dark:text-gray-200">描述</label>
               <input v-model="modelForm.description" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" />
             </div>
             <div class="grid grid-cols-2 gap-4">
               <div>
-                <label class="block text-sm font-medium mb-1 dark:text-gray-200">输入价格 BU/M tokens</label>
+                <label class="block text-sm font-medium mb-1 dark:text-gray-200">输入价格 credits/M tokens</label>
                 <input v-model.number="modelForm.input_price" type="number" step="0.01" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" />
               </div>
               <div>
-                <label class="block text-sm font-medium mb-1 dark:text-gray-200">输出价格 BU/M tokens</label>
+                <label class="block text-sm font-medium mb-1 dark:text-gray-200">输出价格 credits/M tokens</label>
                 <input v-model.number="modelForm.output_price" type="number" step="0.01" class="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white" />
               </div>
             </div>
@@ -663,7 +648,6 @@ onMounted(loadData)
                 <option value="">选择供应商</option>
                 <option v-for="p in getFilteredProviders()" :key="p.id" :value="p.id">{{ p.name }} ({{ p.type }})</option>
               </select>
-              <p v-if="!editingUpstream" class="text-xs text-gray-500 mt-1">仅显示与模型类型匹配的供应商</p>
             </div>
             <div>
               <label class="block text-sm font-medium mb-1 dark:text-gray-200">供应商密钥</label>

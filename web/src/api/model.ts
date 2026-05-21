@@ -70,10 +70,6 @@ export const upstreamApi = {
     return api.post(`/upstreams/${id}/toggle`)
   },
 
-  resetStatus(id: string): Promise<ApiResponse<Upstream>> {
-    return api.post(`/upstreams/${id}/reset-status`)
-  },
-
   test(id: string): Promise<ApiResponse<UpstreamTestResult>> {
     return api.post(`/upstreams/${id}/test`)
   }

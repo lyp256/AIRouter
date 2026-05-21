@@ -122,6 +122,5 @@ func (h *Handler) ServeIndexHTML(c *gin.Context) {
 func IsAPIPath(path string) bool {
 	return strings.HasPrefix(path, "/v1/") ||
 		strings.HasPrefix(path, "/v1") ||
-		strings.HasPrefix(path, "/api/") ||
-		strings.HasPrefix(path, "/health")
+		strings.HasPrefix(path, "/api/")
 }

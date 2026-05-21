@@ -47,16 +47,6 @@ cache:
   type: "memory"
   ttl: "10m"
   size: 64
-
-health_check:
-  enabled: true
-  full_check_interval: "5m"
-  recovery_interval: "30s"
-  timeout: "10s"
-  healthy_threshold: 2
-  unhealthy_threshold: 3
-  leader_lease: "30s"
-  leader_renew_interval: "10s"
 ```
 
 ---
@@ -137,32 +127,9 @@ health_check:
 | `redis.db` | int | `0` | Redis 数据库编号 |
 
 **缓存用途**：
-- 模型配置缓存（`model:name:{name}:type:{type}`）
+- 模型配置缓存（`model:name:{name}`）
 - 上游模型列表缓存（`upstreams:model:{modelID}`）
 - 供应商/密钥信息缓存（`provider:{id}`、`provider_key:{id}`）
-- 上游健康状态（`upstream:health:{upstreamID}`，TTL 1 小时）
-- 分布式选主（`leader:health-check:*`）
-
-### health_check — 健康检查
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `enabled` | bool | `true` | 是否启用健康检查服务 |
-| `full_check_interval` | duration | `5m` | 全量检查间隔，对所有启用上游执行探测 |
-| `recovery_interval` | duration | `30s` | 恢复检查间隔，仅对不健康上游执行探测 |
-| `timeout` | duration | `10s` | 单次探测 HTTP 超时时间 |
-| `healthy_threshold` | int | `2` | 连续成功达到此阈值后标记为健康 |
-| `unhealthy_threshold` | int | `3` | 连续失败达到此阈值后标记为不健康 |
-| `leader_lease` | duration | `30s` | 分布式选主租约时长 |
-| `leader_renew_interval` | duration | `10s` | 选主续约间隔 |
-
-**工作机制**：
-- 探测方式：向供应商 `/v1/models` 端点发送 GET 请求，HTTP 429（限流）不算不健康
-- 按 `(供应商ID, 密钥ID)` 去重，相同凭据的上游只探测一次
-- 健康状态存储在缓存中（`upstream:health:{upstreamID}`），不写入数据库
-- 缓存中无记录的上游视为健康
-- Redis 缓存模式下通过分布式选主保证只有一个实例执行检查
-- 内存缓存模式下各实例独立运行检查
 
 ---
 
